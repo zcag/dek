@@ -130,3 +130,11 @@ dek --target user@host cargo.csvlens
     { pkg = "fd-find", bin = "fd" },
   ]
   ```
+- Refactor: replace hardcoded `ensure_*` functions with declarative prerequisites. Providers should declare deps, dek resolves them:
+  ```rust
+  impl Provider for CargoProvider {
+      fn requires(&self) -> Vec<Requirement> {
+          vec![Requirement::Binary("cargo"), Requirement::Binary("cargo-binstall")]
+      }
+  }
+  ```
