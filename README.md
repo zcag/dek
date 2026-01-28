@@ -115,15 +115,19 @@ dek --target user@host apply
 dek --target user@host cargo.bat
 ```
 
-## Bake (planned)
+## Bake
 
 Embed config into a standalone binary:
 
 ```bash
 dek bake dek.toml -o mysetup      # from file
 dek bake dek/ -o mysetup          # from directory
-./mysetup apply                    # runs anywhere, no deps
+./mysetup                          # applies config (default)
+./mysetup check                    # dry-run
+./mysetup info                     # show bake info
 ```
+
+Baked binaries are ~750KB, self-contained, and show "Baked with dek on DATE by user@host".
 
 ## TODO
 

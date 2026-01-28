@@ -195,12 +195,16 @@ fn run_test(config_path: Option<PathBuf>, image: String, keep: bool) -> Result<(
 
     // Build docker args
     let container_name = format!("dek-test-{}", std::process::id());
-    let mut args = vec![
-        "run".to_string(),
-        "-it".to_string(),
-        "--name".to_string(),
-        container_name.clone(),
-    ];
+    let mut args = vec!["run".to_string()];
+
+    // Only use -it if we have a TTY
+    use std::io::IsTerminal;
+    if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+        args.push("-it".to_string());
+    }
+
+    args.push("--name".to_string());
+    args.push(container_name.clone());
 
     if !keep {
         args.push("--rm".to_string());

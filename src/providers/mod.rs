@@ -110,17 +110,40 @@ impl Requirement {
         match &self.install {
             InstallMethod::Rustup => {
                 run_install_script("https://sh.rustup.rs", &["-y"])?;
-                // Add to PATH
+                // Add to PATH for this process and child processes
                 if let Ok(home) = std::env::var("HOME") {
+                    let cargo_bin = format!("{}/.cargo/bin", home);
                     if let Ok(path) = std::env::var("PATH") {
-                        std::env::set_var("PATH", format!("{}/.cargo/bin:{}", home, path));
+                        std::env::set_var("PATH", format!("{}:{}", cargo_bin, path));
+                    } else {
+                        std::env::set_var("PATH", &cargo_bin);
+                    }
+                    // Verify binary exists directly (don't rely on which)
+                    let binary_path = format!("{}/{}", cargo_bin, self.binary);
+                    if std::path::Path::new(&binary_path).exists() {
+                        return Ok(());
                     }
                 }
             }
             InstallMethod::Cargo(pkg) => {
-                let output = run_cmd("cargo", &["install", pkg])?;
+                // Use full path to cargo if not in PATH
+                let cargo = if command_exists("cargo") {
+                    "cargo".to_string()
+                } else if let Ok(home) = std::env::var("HOME") {
+                    format!("{}/.cargo/bin/cargo", home)
+                } else {
+                    "cargo".to_string()
+                };
+                let output = run_cmd(&cargo, &["install", pkg])?;
                 if !output.status.success() {
                     bail!("cargo install {} failed", pkg);
+                }
+                // Verify binary exists directly
+                if let Ok(home) = std::env::var("HOME") {
+                    let binary_path = format!("{}/.cargo/bin/{}", home, self.binary);
+                    if std::path::Path::new(&binary_path).exists() {
+                        return Ok(());
+                    }
                 }
             }
             InstallMethod::System(pkg) => {
