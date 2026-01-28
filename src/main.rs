@@ -17,7 +17,11 @@ use std::process::{Command, Stdio};
 #[command(propagate_version = true)]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
+
+    /// Inline install: provider.package (e.g., cargo.bat apt.htop)
+    #[arg(value_name = "SPEC", trailing_var_arg = true)]
+    inline: Vec<String>,
 }
 
 #[derive(Subcommand)]
@@ -67,16 +71,26 @@ enum Commands {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // Handle inline mode: dek cargo.bat apt.htop
+    if !cli.inline.is_empty() {
+        return run_inline(&cli.inline);
+    }
+
     match cli.command {
-        Commands::Apply { config } => run_apply(config),
-        Commands::Check { config } => run_check(config),
-        Commands::Plan { config } => run_plan(config),
-        Commands::Test { config, image, keep } => run_test(config, image, keep),
-        Commands::Completions { shell } => {
+        Some(Commands::Apply { config }) => run_apply(config),
+        Some(Commands::Check { config }) => run_check(config),
+        Some(Commands::Plan { config }) => run_plan(config),
+        Some(Commands::Test { config, image, keep }) => run_test(config, image, keep),
+        Some(Commands::Completions { shell }) => {
             generate(shell, &mut Cli::command(), "dek", &mut io::stdout());
             Ok(())
         }
-        Commands::Setup => run_setup(),
+        Some(Commands::Setup) => run_setup(),
+        None => {
+            // No command and no inline args - show help
+            Cli::command().print_help()?;
+            Ok(())
+        }
     }
 }
 
@@ -116,6 +130,35 @@ fn run_plan(config_path: Option<PathBuf>) -> Result<()> {
     let config = config::load(&path)?;
     let runner = runner::Runner::new(runner::Mode::Plan);
     runner.run(&config)
+}
+
+fn run_inline(specs: &[String]) -> Result<()> {
+    use crate::providers::StateItem;
+
+    output::print_header("Installing");
+    println!();
+
+    let mut items = Vec::new();
+
+    for spec in specs {
+        let (provider, package) = spec
+            .split_once('.')
+            .ok_or_else(|| anyhow::anyhow!("Invalid spec '{}'. Use provider.package (e.g., cargo.bat)", spec))?;
+
+        let kind = match provider {
+            "apt" => "package.apt",
+            "cargo" => "package.cargo",
+            "go" => "package.go",
+            "npm" => "package.npm",
+            "pip" => "package.pip",
+            _ => bail!("Unknown provider '{}'. Use: apt, cargo, go, npm, pip", provider),
+        };
+
+        items.push(StateItem::new(kind, package));
+    }
+
+    let runner = runner::Runner::new(runner::Mode::Apply);
+    runner.run_items(&items)
 }
 
 fn run_test(config_path: Option<PathBuf>, image: String, keep: bool) -> Result<()> {

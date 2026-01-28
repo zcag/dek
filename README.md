@@ -95,11 +95,22 @@ dek test --keep             # don't destroy after exit
 
 Builds dek locally and mounts into container - no compilation inside the container.
 
+## Inline
+
+Quick one-off installs without a config file:
+
+```bash
+dek cargo.bat cargo.eza apt.htop
+dek pip.httpie npm.prettier
+```
+
+Format: `provider.package` where provider is `apt`, `cargo`, `go`, `npm`, or `pip`.
+
 ## Remote (planned)
 
 ```bash
 dek --target user@host apply
-dek --target user@host apply ~/dek/
+dek --target user@host cargo.bat
 ```
 
 ## Bake (planned)
@@ -110,15 +121,6 @@ Embed config into a standalone binary:
 dek bake dek.toml -o mysetup      # from file
 dek bake dek/ -o mysetup          # from directory
 ./mysetup apply                    # runs anywhere, no deps
-```
-
-## Inline (planned)
-
-Quick one-off installs without a config file:
-
-```bash
-dek cargo.bat cargo.eza go.fzf apt.htop
-dek --target user@host cargo.csvlens
 ```
 
 ## TODO

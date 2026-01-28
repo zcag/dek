@@ -26,16 +26,19 @@ impl Runner {
 
     pub fn run(&self, config: &Config) -> Result<()> {
         let items = collect_state_items(config);
+        self.run_items(&items)
+    }
 
+    pub fn run_items(&self, items: &[StateItem]) -> Result<()> {
         if items.is_empty() {
-            println!("  No items in config");
+            println!("  No items");
             return Ok(());
         }
 
         match self.mode {
-            Mode::Plan => self.plan_all(&items),
-            Mode::Check => self.check_all(&items),
-            Mode::Apply => self.apply_all(&items),
+            Mode::Plan => self.plan_all(items),
+            Mode::Check => self.check_all(items),
+            Mode::Apply => self.apply_all(items),
         }
     }
 
