@@ -1,0 +1,10 @@
+# Test config for dek
+
+[alias]
+dektest = "echo 'dek test'"
+
+[env]
+DEK_TEST = "hello"
+
+[file.ensure_line]
+"/tmp/dek_test.txt" = ["# managed by dek"]

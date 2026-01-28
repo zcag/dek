@@ -1,0 +1,43 @@
+# Example dek configuration
+
+# Packages - multiple backends
+[package.apt]
+items = ["curl", "git", "ripgrep"]
+
+[package.cargo]
+items = ["bat", "eza"]
+
+[package.go]
+items = ["github.com/junegunn/fzf@latest"]
+
+# Services - systemd
+[[service]]
+name = "docker"
+state = "active"
+enabled = true
+
+[[service]]
+name = "nginx"
+state = "active"
+
+# Files
+[file.copy]
+"dotfiles/.zshrc" = "~/.zshrc"
+
+[file.symlink]
+"~/dotfiles/nvim" = "~/.config/nvim"
+
+[file.ensure_line]
+"~/.bashrc" = ["export PATH=$HOME/.local/bin:$PATH", "source ~/.aliases"]
+
+# Shell
+[alias]
+la = "ls -larth"
+v = "nvim"
+lg = "lazygit"
+
+[env]
+EDITOR = "nvim"
+
+# System
+timezone = "Europe/Istanbul"

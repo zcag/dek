@@ -1,7 +1,7 @@
 [package]
 name = "dek"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 description = "Declarative environment setup and scripted workflows from TOML"
 license = "MIT"
 repository = "https://github.com/zcag/dek"
@@ -9,3 +9,7 @@ keywords = ["cli", "automation", "environment", "workflow", "toml"]
 categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+anyhow = "1"
