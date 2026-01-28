@@ -36,6 +36,37 @@ impl Provider for AptProvider {
 }
 
 // =============================================================================
+// PACMAN
+// =============================================================================
+
+pub struct PacmanProvider;
+
+impl Provider for PacmanProvider {
+    fn name(&self) -> &'static str {
+        "package.pacman"
+    }
+
+    fn check(&self, state: &StateItem) -> Result<CheckResult> {
+        let ok = run_cmd_ok("pacman", &["-Q", &state.key]);
+        if ok {
+            Ok(CheckResult::Satisfied)
+        } else {
+            Ok(CheckResult::Missing {
+                detail: format!("package '{}' not installed", state.key),
+            })
+        }
+    }
+
+    fn apply(&self, state: &StateItem) -> Result<()> {
+        let output = run_sudo("pacman", &["-S", "--noconfirm", &state.key])?;
+        if !output.status.success() {
+            bail!("pacman install failed: {}", String::from_utf8_lossy(&output.stderr));
+        }
+        Ok(())
+    }
+}
+
+// =============================================================================
 // CARGO
 // =============================================================================
 

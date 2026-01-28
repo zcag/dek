@@ -150,6 +150,11 @@ fn collect_state_items(config: &Config) -> Vec<StateItem> {
                 items.push(StateItem::new("package.apt", item));
             }
         }
+        if let Some(ref pacman) = pkg.pacman {
+            for item in &pacman.items {
+                items.push(StateItem::new("package.pacman", item));
+            }
+        }
         if let Some(ref cargo) = pkg.cargo {
             for item in &cargo.items {
                 items.push(StateItem::new("package.cargo", item));

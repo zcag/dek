@@ -1,7 +1,7 @@
 # Example dek configuration
 
 [package.pacman]
-items = ["git", "tree", "fzf", "bat"]
+items = ["git", "tree", "fzf", "bat", "btop"]
 
 [package.cargo]
 items = ["bat", "eza"]
@@ -18,7 +18,7 @@ items = [
 
 # Services - systemd
 [[service]]
-name = "docker"
+name = "xremap"
 state = "active"
 enabled = true
 
@@ -26,21 +26,14 @@ enabled = true
 name = "nginx"
 state = "active"
 
-# Files
-[file.copy]
-"dotfiles/.zshrc" = "~/.zshrc"
-
-[file.symlink]
-"~/dotfiles/nvim" = "~/.config/nvim"
-
-[file.ensure_line]
-"~/.bashrc" = ["export PATH=$HOME/.local/bin:$PATH", "source ~/.aliases"]
-
 # Shell
 [alias]
 la = "ls -larth"
 v = "nvim"
 lg = "lazygit"
+ccsvp = "ccsv --sep '|'"
+lens =  "csvlens"
+lensp = "csvlens --delimiter '|'"
 
 [env]
 EDITOR = "nvim"

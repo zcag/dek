@@ -19,6 +19,7 @@ pub struct Config {
 #[serde(default)]
 pub struct PackageConfig {
     pub apt: Option<PackageList>,
+    pub pacman: Option<PackageList>,
     pub cargo: Option<PackageList>,
     pub go: Option<PackageList>,
     pub npm: Option<PackageList>,

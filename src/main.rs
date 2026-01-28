@@ -147,11 +147,12 @@ fn run_inline(specs: &[String]) -> Result<()> {
 
         let kind = match provider {
             "apt" => "package.apt",
+            "pacman" => "package.pacman",
             "cargo" => "package.cargo",
             "go" => "package.go",
             "npm" => "package.npm",
             "pip" => "package.pip",
-            _ => bail!("Unknown provider '{}'. Use: apt, cargo, go, npm, pip", provider),
+            _ => bail!("Unknown provider '{}'. Use: apt, pacman, cargo, go, npm, pip", provider),
         };
 
         items.push(StateItem::new(kind, package));

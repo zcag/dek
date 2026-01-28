@@ -200,6 +200,7 @@ impl ProviderRegistry {
     pub fn new() -> Self {
         let providers: Vec<Box<dyn Provider>> = vec![
             Box::new(package::AptProvider),
+            Box::new(package::PacmanProvider),
             Box::new(package::CargoProvider),
             Box::new(package::GoProvider),
             Box::new(package::NpmProvider),
