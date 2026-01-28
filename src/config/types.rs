@@ -18,6 +18,7 @@ pub struct Config {
 #[derive(Debug, Deserialize, Default)]
 #[serde(default)]
 pub struct PackageConfig {
+    pub os: Option<PackageList>,
     pub apt: Option<PackageList>,
     pub pacman: Option<PackageList>,
     pub cargo: Option<PackageList>,

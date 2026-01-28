@@ -1,6 +1,47 @@
 use super::{CheckResult, InstallMethod, Provider, Requirement, StateItem};
-use crate::util::{command_exists, run_cmd, run_cmd_ok, run_sudo};
+use crate::util::{command_exists, run_cmd, run_cmd_ok, run_sudo, SysPkgManager};
 use anyhow::{bail, Result};
+
+// =============================================================================
+// OS (auto-detect system package manager)
+// =============================================================================
+
+pub struct OsProvider;
+
+impl Provider for OsProvider {
+    fn name(&self) -> &'static str {
+        "package.os"
+    }
+
+    fn check(&self, state: &StateItem) -> Result<CheckResult> {
+        let pm = SysPkgManager::detect()
+            .ok_or_else(|| anyhow::anyhow!("No supported package manager found"))?;
+
+        let installed = match pm {
+            SysPkgManager::Pacman => run_cmd_ok("pacman", &["-Q", &state.key]),
+            SysPkgManager::Apt => {
+                let output = run_cmd("dpkg-query", &["-W", "-f=${Status}", &state.key])?;
+                String::from_utf8_lossy(&output.stdout).contains("install ok installed")
+            }
+            SysPkgManager::Dnf => run_cmd_ok("rpm", &["-q", &state.key]),
+            SysPkgManager::Brew => run_cmd_ok("brew", &["list", &state.key]),
+        };
+
+        if installed {
+            Ok(CheckResult::Satisfied)
+        } else {
+            Ok(CheckResult::Missing {
+                detail: format!("package '{}' not installed", state.key),
+            })
+        }
+    }
+
+    fn apply(&self, state: &StateItem) -> Result<()> {
+        let pm = SysPkgManager::detect()
+            .ok_or_else(|| anyhow::anyhow!("No supported package manager found"))?;
+        pm.install(&state.key)
+    }
+}
 
 // =============================================================================
 // APT

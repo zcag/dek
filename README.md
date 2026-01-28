@@ -27,11 +27,11 @@ dek plan               # list items from config (no state check)
 ## Config
 
 ```toml
-# Packages (auto-installs cargo/go/npm/pip if missing)
-[package.pacman]
+# Packages
+[package.os]  # auto-detects: pacman, apt, dnf, brew
 items = ["curl", "git", "htop"]
 
-[package.cargo]
+[package.cargo]  # auto-installs cargo/go/npm/pip if missing
 items = ["bat", "eza", "ripgrep"]
 
 [package.go]
@@ -100,11 +100,13 @@ Builds dek locally and mounts into container - no compilation inside the contain
 Quick one-off installs without a config file:
 
 ```bash
-dek cargo.bat cargo.eza pacman.htop
+dek os.htop os.git cargo.bat
 dek pip.httpie npm.prettier
 ```
 
-Format: `provider.package` where provider is `apt`, `pacman`, `cargo`, `go`, `npm`, or `pip`.
+Format: `provider.package` where provider is `os`, `apt`, `pacman`, `cargo`, `go`, `npm`, or `pip`.
+
+`os` auto-detects your system package manager (pacman, apt, dnf, brew).
 
 ## Remote (planned)
 

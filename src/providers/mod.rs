@@ -199,6 +199,7 @@ impl Default for ProviderRegistry {
 impl ProviderRegistry {
     pub fn new() -> Self {
         let providers: Vec<Box<dyn Provider>> = vec![
+            Box::new(package::OsProvider),
             Box::new(package::AptProvider),
             Box::new(package::PacmanProvider),
             Box::new(package::CargoProvider),

@@ -145,6 +145,11 @@ fn collect_state_items(config: &Config) -> Vec<StateItem> {
 
     // Packages
     if let Some(ref pkg) = config.package {
+        if let Some(ref os) = pkg.os {
+            for item in &os.items {
+                items.push(StateItem::new("package.os", item));
+            }
+        }
         if let Some(ref apt) = pkg.apt {
             for item in &apt.items {
                 items.push(StateItem::new("package.apt", item));

@@ -146,13 +146,14 @@ fn run_inline(specs: &[String]) -> Result<()> {
             .ok_or_else(|| anyhow::anyhow!("Invalid spec '{}'. Use provider.package (e.g., cargo.bat)", spec))?;
 
         let kind = match provider {
+            "os" => "package.os",
             "apt" => "package.apt",
             "pacman" => "package.pacman",
             "cargo" => "package.cargo",
             "go" => "package.go",
             "npm" => "package.npm",
             "pip" => "package.pip",
-            _ => bail!("Unknown provider '{}'. Use: apt, pacman, cargo, go, npm, pip", provider),
+            _ => bail!("Unknown provider '{}'. Use: os, apt, pacman, cargo, go, npm, pip", provider),
         };
 
         items.push(StateItem::new(kind, package));
