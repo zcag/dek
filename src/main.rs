@@ -119,6 +119,8 @@ fn run_plan(config_path: Option<PathBuf>) -> Result<()> {
 }
 
 fn run_test(config_path: Option<PathBuf>, image: String, keep: bool) -> Result<()> {
+    use owo_colors::OwoColorize;
+
     // Check docker is available
     if which::which("docker").is_err() {
         bail!("docker not found in PATH");
@@ -130,6 +132,21 @@ fn run_test(config_path: Option<PathBuf>, image: String, keep: bool) -> Result<(
 
     output::print_header(&format!("Testing {} in {}", config_path.display(), image));
     println!();
+
+    // Build dek binary
+    println!("  {} Building dek...", "→".yellow());
+    let build_status = Command::new("cargo")
+        .args(["build", "--release", "--quiet"])
+        .status()?;
+    if !build_status.success() {
+        bail!("cargo build failed");
+    }
+
+    // Find the built binary
+    let dek_binary = cwd.join("target/release/dek");
+    if !dek_binary.exists() {
+        bail!("dek binary not found at {}", dek_binary.display());
+    }
 
     // Build docker args
     let container_name = format!("dek-test-{}", std::process::id());
@@ -143,6 +160,10 @@ fn run_test(config_path: Option<PathBuf>, image: String, keep: bool) -> Result<(
     if !keep {
         args.push("--rm".to_string());
     }
+
+    // Mount dek binary
+    args.push("-v".to_string());
+    args.push(format!("{}:/usr/local/bin/dek:ro", dek_binary.display()));
 
     // Mount current directory
     args.push("-v".to_string());
@@ -159,27 +180,23 @@ fn run_test(config_path: Option<PathBuf>, image: String, keep: bool) -> Result<(
 
     args.push(image);
 
-    // Run shell with dek apply
-    args.push("sh".to_string());
-    args.push("-c".to_string());
-
+    // Config path inside container
     let config_in_container = if config_abs.starts_with(&cwd) {
         format!("/workspace/{}", config_path.display())
     } else {
         "/config".to_string()
     };
 
+    // Run shell with dek apply
+    args.push("sh".to_string());
+    args.push("-c".to_string());
     args.push(format!(
-        r#"echo "Installing dek..." && \
-        (command -v cargo >/dev/null 2>&1 || (curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && source $HOME/.cargo/env)) && \
-        cargo install --path /workspace --quiet 2>/dev/null || cargo install dek --quiet && \
-        echo "" && \
-        dek apply {} && \
-        echo "" && \
-        echo "Dropping into shell..." && \
-        exec sh"#,
+        r#"dek apply {} && echo "" && echo "Dropping into shell..." && exec sh"#,
         config_in_container
     ));
+
+    println!("  {} Starting container...", "→".yellow());
+    println!();
 
     // Run docker
     let status = Command::new("docker")

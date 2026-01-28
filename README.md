@@ -83,7 +83,7 @@ dek/
 
 Files are merged alphabetically.
 
-## Test (planned)
+## Test
 
 Spin up a container, apply config, drop into shell:
 
@@ -92,6 +92,8 @@ dek test                    # archlinux by default
 dek test --image ubuntu
 dek test --keep             # don't destroy after exit
 ```
+
+Builds dek locally and mounts into container - no compilation inside the container.
 
 ## Remote (planned)
 
