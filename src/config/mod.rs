@@ -52,8 +52,14 @@ fn merge_config(base: &mut Config, other: Config) {
     // Merge packages
     if let Some(pkg) = other.package {
         let base_pkg = base.package.get_or_insert_with(PackageConfig::default);
+        if pkg.os.is_some() {
+            base_pkg.os = pkg.os;
+        }
         if pkg.apt.is_some() {
             base_pkg.apt = pkg.apt;
+        }
+        if pkg.pacman.is_some() {
+            base_pkg.pacman = pkg.pacman;
         }
         if pkg.cargo.is_some() {
             base_pkg.cargo = pkg.cargo;

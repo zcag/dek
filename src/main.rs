@@ -1,3 +1,4 @@
+mod bake;
 mod config;
 mod output;
 mod providers;
@@ -6,6 +7,7 @@ mod util;
 
 use anyhow::{bail, Result};
 use clap::{CommandFactory, Parser, Subcommand};
+use owo_colors::OwoColorize;
 use clap_complete::{generate, Shell};
 use std::io;
 use std::path::PathBuf;
@@ -58,6 +60,16 @@ enum Commands {
         #[arg(short, long)]
         keep: bool,
     },
+    /// Bake config into standalone binary
+    Bake {
+        /// Config file or directory to embed
+        #[arg(value_name = "CONFIG")]
+        config: Option<PathBuf>,
+
+        /// Output binary path
+        #[arg(short, long, default_value = "dek-baked")]
+        output: PathBuf,
+    },
     /// Generate shell completions (raw output)
     Completions {
         /// Shell to generate completions for
@@ -81,6 +93,7 @@ fn main() -> Result<()> {
         Some(Commands::Check { config }) => run_check(config),
         Some(Commands::Plan { config }) => run_plan(config),
         Some(Commands::Test { config, image, keep }) => run_test(config, image, keep),
+        Some(Commands::Bake { config, output }) => bake::run(config, output),
         Some(Commands::Completions { shell }) => {
             generate(shell, &mut Cli::command(), "dek", &mut io::stdout());
             Ok(())
@@ -97,14 +110,23 @@ fn main() -> Result<()> {
 fn resolve_config(config: Option<PathBuf>) -> Result<PathBuf> {
     match config {
         Some(path) => Ok(path),
-        None => config::find_default_config()
-            .ok_or_else(|| anyhow::anyhow!("No config found. Create dek.toml or dek/ directory")),
+        None => {
+            // Check for embedded config first (baked binary)
+            if let Some(path) = bake::check_embedded() {
+                return Ok(path);
+            }
+            config::find_default_config()
+                .ok_or_else(|| anyhow::anyhow!("No config found. Create dek.toml or dek/ directory"))
+        }
     }
 }
 
 fn run_apply(config_path: Option<PathBuf>) -> Result<()> {
     let path = resolve_config(config_path)?;
     output::print_header(&format!("Applying {}", path.display()));
+    if let Some(info) = bake::get_bake_info() {
+        println!("{}", info.dimmed());
+    }
     println!();
 
     let config = config::load(&path)?;
@@ -115,6 +137,9 @@ fn run_apply(config_path: Option<PathBuf>) -> Result<()> {
 fn run_check(config_path: Option<PathBuf>) -> Result<()> {
     let path = resolve_config(config_path)?;
     output::print_header(&format!("Checking {}", path.display()));
+    if let Some(info) = bake::get_bake_info() {
+        println!("{}", info.dimmed());
+    }
     println!();
 
     let config = config::load(&path)?;
@@ -125,6 +150,9 @@ fn run_check(config_path: Option<PathBuf>) -> Result<()> {
 fn run_plan(config_path: Option<PathBuf>) -> Result<()> {
     let path = resolve_config(config_path)?;
     output::print_header(&format!("Plan for {}", path.display()));
+    if let Some(info) = bake::get_bake_info() {
+        println!("{}", info.dimmed());
+    }
     println!();
 
     let config = config::load(&path)?;
