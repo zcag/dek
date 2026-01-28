@@ -10,6 +10,9 @@ Declarative environment setup. One TOML, any machine.
 cargo install dek
 # or
 curl cagdas.io/dek | sh
+
+# setup completions
+dek setup
 ```
 
 ## Usage
