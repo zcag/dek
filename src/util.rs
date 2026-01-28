@@ -60,26 +60,6 @@ pub fn command_exists(cmd: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Get binary path from cargo
-pub fn cargo_bin_path() -> PathBuf {
-    if let Ok(home) = std::env::var("CARGO_HOME") {
-        PathBuf::from(home).join("bin")
-    } else {
-        expand_path("~/.cargo/bin")
-    }
-}
-
-/// Get binary path from go
-pub fn go_bin_path() -> PathBuf {
-    if let Ok(gopath) = std::env::var("GOPATH") {
-        PathBuf::from(gopath).join("bin")
-    } else if let Ok(home) = std::env::var("GOBIN") {
-        PathBuf::from(home)
-    } else {
-        expand_path("~/go/bin")
-    }
-}
-
 /// Detected system package manager
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SysPkgManager {

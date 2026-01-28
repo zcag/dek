@@ -58,9 +58,9 @@ impl Provider for AliasProvider {
 
         // Remove existing alias definition if present
         let prefix = format!("alias {}=", alias_name);
-        let lines: Vec<&str> = content
+        let lines: Vec<_> = content
             .lines()
-            .filter(|line| !line.starts_with(&prefix))
+            .filter(|line: &&str| !line.starts_with(&prefix))
             .collect();
 
         let mut new_content = lines.join("\n");
@@ -130,9 +130,9 @@ impl Provider for EnvProvider {
 
         // Remove existing env var definition if present
         let prefix = format!("export {}=", var_name);
-        let lines: Vec<&str> = content
+        let lines: Vec<_> = content
             .lines()
-            .filter(|line| !line.starts_with(&prefix))
+            .filter(|line: &&str| !line.starts_with(&prefix))
             .collect();
 
         let mut new_content = lines.join("\n");

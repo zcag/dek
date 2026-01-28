@@ -1,8 +1,5 @@
 use super::{CheckResult, Provider, StateItem};
-use crate::util::{
-    cargo_bin_path, command_exists, go_bin_path, run_cmd, run_cmd_ok, run_install_script,
-    run_sudo, SysPkgManager,
-};
+use crate::util::{command_exists, run_cmd, run_cmd_ok, run_install_script, run_sudo, SysPkgManager};
 use anyhow::{bail, Result};
 
 // =============================================================================
@@ -53,27 +50,21 @@ impl Provider for CargoProvider {
     }
 
     fn check(&self, state: &StateItem) -> Result<CheckResult> {
-        let bin_name = extract_cargo_bin_name(&state.key);
-        let bin_path = cargo_bin_path().join(&bin_name);
-
-        if bin_path.exists() {
+        let bin_name = cargo_bin_name(&state.key);
+        if command_exists(&bin_name) {
             Ok(CheckResult::Satisfied)
         } else {
             Ok(CheckResult::Missing {
-                detail: format!("cargo binary '{}' not found", bin_name),
+                detail: format!("'{}' not in PATH", bin_name),
             })
         }
     }
 
     fn apply(&self, state: &StateItem) -> Result<()> {
         ensure_cargo()?;
-
         let output = run_cmd("cargo", &["install", &state.key])?;
         if !output.status.success() {
-            bail!(
-                "cargo install failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            bail!("cargo install failed: {}", String::from_utf8_lossy(&output.stderr));
         }
         Ok(())
     }
@@ -83,27 +74,25 @@ fn ensure_cargo() -> Result<()> {
     if command_exists("cargo") {
         return Ok(());
     }
-
     println!("  → Installing rustup/cargo...");
     run_install_script("https://sh.rustup.rs", &["-y"])?;
-
-    // Source cargo env for current process
-    let cargo_bin = cargo_bin_path();
-    if let Ok(path) = std::env::var("PATH") {
-        std::env::set_var("PATH", format!("{}:{}", cargo_bin.display(), path));
+    // Add to PATH for current process
+    if let Ok(home) = std::env::var("HOME") {
+        if let Ok(path) = std::env::var("PATH") {
+            std::env::set_var("PATH", format!("{}/.cargo/bin:{}", home, path));
+        }
     }
-
     Ok(())
 }
 
-fn extract_cargo_bin_name(pkg: &str) -> String {
+fn cargo_bin_name(pkg: &str) -> String {
     match pkg {
-        "ripgrep" => "rg".to_string(),
-        "fd-find" => "fd".to_string(),
-        "du-dust" => "dust".to_string(),
-        "bottom" => "btm".to_string(),
-        _ => pkg.to_string(),
-    }
+        "ripgrep" => "rg",
+        "fd-find" => "fd",
+        "du-dust" => "dust",
+        "bottom" => "btm",
+        _ => pkg,
+    }.to_string()
 }
 
 // =============================================================================
@@ -118,27 +107,21 @@ impl Provider for GoProvider {
     }
 
     fn check(&self, state: &StateItem) -> Result<CheckResult> {
-        let bin_name = extract_go_bin_name(&state.key);
-        let bin_path = go_bin_path().join(&bin_name);
-
-        if bin_path.exists() {
+        let bin_name = go_bin_name(&state.key);
+        if command_exists(&bin_name) {
             Ok(CheckResult::Satisfied)
         } else {
             Ok(CheckResult::Missing {
-                detail: format!("go binary '{}' not found", bin_name),
+                detail: format!("'{}' not in PATH", bin_name),
             })
         }
     }
 
     fn apply(&self, state: &StateItem) -> Result<()> {
         ensure_go()?;
-
         let output = run_cmd("go", &["install", &state.key])?;
         if !output.status.success() {
-            bail!(
-                "go install failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            bail!("go install failed: {}", String::from_utf8_lossy(&output.stderr));
         }
         Ok(())
     }
@@ -148,16 +131,14 @@ fn ensure_go() -> Result<()> {
     if command_exists("go") {
         return Ok(());
     }
-
     println!("  → Installing go...");
     let pm = SysPkgManager::detect()
         .ok_or_else(|| anyhow::anyhow!("No supported package manager found to install go"))?;
-
     pm.install(pm.package_name("go"))?;
     Ok(())
 }
 
-fn extract_go_bin_name(pkg: &str) -> String {
+fn go_bin_name(pkg: &str) -> String {
     let pkg = pkg.split('@').next().unwrap_or(pkg);
     pkg.rsplit('/').next().unwrap_or(pkg).to_string()
 }
