@@ -1,5 +1,5 @@
-use super::{CheckResult, Provider, StateItem};
-use crate::util::{command_exists, run_cmd, run_cmd_ok, run_install_script, run_sudo, SysPkgManager};
+use super::{CheckResult, InstallMethod, Provider, Requirement, StateItem};
+use crate::util::{command_exists, run_cmd, run_cmd_ok, run_sudo};
 use anyhow::{bail, Result};
 
 // =============================================================================
@@ -29,10 +29,7 @@ impl Provider for AptProvider {
     fn apply(&self, state: &StateItem) -> Result<()> {
         let output = run_sudo("apt-get", &["install", "-y", &state.key])?;
         if !output.status.success() {
-            bail!(
-                "apt-get install failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            bail!("apt-get install failed: {}", String::from_utf8_lossy(&output.stderr));
         }
         Ok(())
     }
@@ -49,6 +46,13 @@ impl Provider for CargoProvider {
         "package.cargo"
     }
 
+    fn requires(&self) -> Vec<Requirement> {
+        vec![
+            Requirement::binary("cargo", InstallMethod::Rustup),
+            Requirement::binary("cargo-binstall", InstallMethod::Cargo("cargo-binstall")),
+        ]
+    }
+
     fn check(&self, state: &StateItem) -> Result<CheckResult> {
         let bin_name = cargo_bin_name(&state.key);
         if command_exists(&bin_name) {
@@ -61,49 +65,18 @@ impl Provider for CargoProvider {
     }
 
     fn apply(&self, state: &StateItem) -> Result<()> {
-        ensure_cargo()?;
-        ensure_binstall()?;
-
         // Try binstall first (pre-compiled), fall back to install (compile)
         let output = run_cmd("cargo", &["binstall", "-y", &state.key])?;
         if output.status.success() {
             return Ok(());
         }
 
-        // Fallback to compile
         let output = run_cmd("cargo", &["install", &state.key])?;
         if !output.status.success() {
             bail!("cargo install failed: {}", String::from_utf8_lossy(&output.stderr));
         }
         Ok(())
     }
-}
-
-fn ensure_cargo() -> Result<()> {
-    if command_exists("cargo") {
-        return Ok(());
-    }
-    println!("  → Installing rustup/cargo...");
-    run_install_script("https://sh.rustup.rs", &["-y"])?;
-    // Add to PATH for current process
-    if let Ok(home) = std::env::var("HOME") {
-        if let Ok(path) = std::env::var("PATH") {
-            std::env::set_var("PATH", format!("{}/.cargo/bin:{}", home, path));
-        }
-    }
-    Ok(())
-}
-
-fn ensure_binstall() -> Result<()> {
-    if command_exists("cargo-binstall") {
-        return Ok(());
-    }
-    println!("  → Installing cargo-binstall...");
-    let output = run_cmd("cargo", &["install", "cargo-binstall"])?;
-    if !output.status.success() {
-        bail!("Failed to install cargo-binstall");
-    }
-    Ok(())
 }
 
 fn cargo_bin_name(pkg: &str) -> String {
@@ -113,7 +86,8 @@ fn cargo_bin_name(pkg: &str) -> String {
         "du-dust" => "dust",
         "bottom" => "btm",
         _ => pkg,
-    }.to_string()
+    }
+    .to_string()
 }
 
 // =============================================================================
@@ -125,6 +99,10 @@ pub struct GoProvider;
 impl Provider for GoProvider {
     fn name(&self) -> &'static str {
         "package.go"
+    }
+
+    fn requires(&self) -> Vec<Requirement> {
+        vec![Requirement::binary("go", InstallMethod::System("go"))]
     }
 
     fn check(&self, state: &StateItem) -> Result<CheckResult> {
@@ -139,24 +117,12 @@ impl Provider for GoProvider {
     }
 
     fn apply(&self, state: &StateItem) -> Result<()> {
-        ensure_go()?;
         let output = run_cmd("go", &["install", &state.key])?;
         if !output.status.success() {
             bail!("go install failed: {}", String::from_utf8_lossy(&output.stderr));
         }
         Ok(())
     }
-}
-
-fn ensure_go() -> Result<()> {
-    if command_exists("go") {
-        return Ok(());
-    }
-    println!("  → Installing go...");
-    let pm = SysPkgManager::detect()
-        .ok_or_else(|| anyhow::anyhow!("No supported package manager found to install go"))?;
-    pm.install(pm.package_name("go"))?;
-    Ok(())
 }
 
 fn go_bin_name(pkg: &str) -> String {
@@ -175,6 +141,10 @@ impl Provider for NpmProvider {
         "package.npm"
     }
 
+    fn requires(&self) -> Vec<Requirement> {
+        vec![Requirement::binary("npm", InstallMethod::System("npm"))]
+    }
+
     fn check(&self, state: &StateItem) -> Result<CheckResult> {
         let ok = run_cmd_ok("npm", &["list", "-g", &state.key, "--depth=0"]);
         if ok {
@@ -187,30 +157,12 @@ impl Provider for NpmProvider {
     }
 
     fn apply(&self, state: &StateItem) -> Result<()> {
-        ensure_npm()?;
-
         let output = run_cmd("npm", &["install", "-g", &state.key])?;
         if !output.status.success() {
-            bail!(
-                "npm install failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            bail!("npm install failed: {}", String::from_utf8_lossy(&output.stderr));
         }
         Ok(())
     }
-}
-
-fn ensure_npm() -> Result<()> {
-    if command_exists("npm") {
-        return Ok(());
-    }
-
-    println!("  → Installing npm...");
-    let pm = SysPkgManager::detect()
-        .ok_or_else(|| anyhow::anyhow!("No supported package manager found to install npm"))?;
-
-    pm.install(pm.package_name("npm"))?;
-    Ok(())
 }
 
 // =============================================================================
@@ -224,8 +176,11 @@ impl Provider for PipProvider {
         "package.pip"
     }
 
+    fn requires(&self) -> Vec<Requirement> {
+        vec![Requirement::binary("pip3", InstallMethod::System("python3-pip"))]
+    }
+
     fn check(&self, state: &StateItem) -> Result<CheckResult> {
-        // Try pip3 first, then pip
         let ok = run_cmd_ok("pip3", &["show", &state.key])
             || run_cmd_ok("pip", &["show", &state.key]);
         if ok {
@@ -238,48 +193,11 @@ impl Provider for PipProvider {
     }
 
     fn apply(&self, state: &StateItem) -> Result<()> {
-        let pip = ensure_pip()?;
-
-        let output = run_cmd(&pip, &["install", "--user", &state.key])?;
+        let pip = if command_exists("pip3") { "pip3" } else { "pip" };
+        let output = run_cmd(pip, &["install", "--user", &state.key])?;
         if !output.status.success() {
-            bail!(
-                "pip install failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            bail!("pip install failed: {}", String::from_utf8_lossy(&output.stderr));
         }
         Ok(())
-    }
-}
-
-fn ensure_pip() -> Result<String> {
-    if command_exists("pip3") {
-        return Ok("pip3".to_string());
-    }
-    if command_exists("pip") {
-        return Ok("pip".to_string());
-    }
-
-    println!("  → Installing pip...");
-
-    // Try ensurepip first
-    if command_exists("python3") {
-        let output = run_cmd("python3", &["-m", "ensurepip", "--user"])?;
-        if output.status.success() {
-            return Ok("pip3".to_string());
-        }
-    }
-
-    // Fall back to system package manager
-    let pm = SysPkgManager::detect()
-        .ok_or_else(|| anyhow::anyhow!("No supported package manager found to install pip"))?;
-
-    pm.install(pm.package_name("pip"))?;
-
-    if command_exists("pip3") {
-        Ok("pip3".to_string())
-    } else if command_exists("pip") {
-        Ok("pip".to_string())
-    } else {
-        bail!("pip installation failed")
     }
 }

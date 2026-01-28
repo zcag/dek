@@ -125,3 +125,12 @@ pub fn print_plan_summary(total: usize) {
     println!();
     println!("{} {} items", "•".blue(), total);
 }
+
+pub fn print_resolving_requirements(count: usize) {
+    println!(
+        "  {} resolving {} requirement{}...",
+        "→".yellow(),
+        count,
+        if count == 1 { "" } else { "s" }
+    );
+}

@@ -1,7 +1,8 @@
 use crate::config::Config;
 use crate::output;
-use crate::providers::{ProviderRegistry, StateItem};
+use crate::providers::{resolve_requirements, ProviderRegistry, Requirement, StateItem};
 use anyhow::{bail, Result};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Mode {
@@ -71,6 +72,13 @@ impl Runner {
     }
 
     fn apply_all(&self, items: &[StateItem]) -> Result<()> {
+        // Collect and resolve requirements from all providers
+        let requirements = self.collect_requirements(items)?;
+        if !requirements.is_empty() {
+            output::print_resolving_requirements(requirements.len());
+            resolve_requirements(&requirements)?;
+        }
+
         let mut changed = 0;
         let mut failed = 0;
 
@@ -108,6 +116,24 @@ impl Runner {
         }
 
         Ok(())
+    }
+
+    fn collect_requirements(&self, items: &[StateItem]) -> Result<Vec<Requirement>> {
+        let mut seen_kinds = HashSet::new();
+        let mut requirements = Vec::new();
+
+        for item in items {
+            if seen_kinds.contains(&item.kind) {
+                continue;
+            }
+            seen_kinds.insert(item.kind.clone());
+
+            if let Some(provider) = self.registry.get(&item.kind) {
+                requirements.extend(provider.requires());
+            }
+        }
+
+        Ok(requirements)
     }
 }
 

@@ -105,6 +105,7 @@ impl SysPkgManager {
     }
 
     /// Get the package name for a tool (may differ across package managers)
+    #[allow(dead_code)]
     pub fn package_name<'a>(&self, tool: &'a str) -> &'a str {
         match (self, tool) {
             // Go
