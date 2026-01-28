@@ -3,32 +3,47 @@ use crate::output;
 use crate::providers::{ProviderRegistry, StateItem};
 use anyhow::{bail, Result};
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Mode {
+    Apply,
+    Check,
+    Plan,
+}
+
 pub struct Runner {
     registry: ProviderRegistry,
-    dry_run: bool,
+    mode: Mode,
 }
 
 impl Runner {
-    pub fn new(dry_run: bool) -> Self {
+    pub fn new(mode: Mode) -> Self {
         Self {
             registry: ProviderRegistry::new(),
-            dry_run,
+            mode,
         }
     }
 
     pub fn run(&self, config: &Config) -> Result<()> {
-        let items = self.collect_state_items(config);
+        let items = collect_state_items(config);
 
         if items.is_empty() {
-            println!("No state items found in config");
+            println!("  No items in config");
             return Ok(());
         }
 
-        if self.dry_run {
-            self.check_all(&items)
-        } else {
-            self.apply_all(&items)
+        match self.mode {
+            Mode::Plan => self.plan_all(&items),
+            Mode::Check => self.check_all(&items),
+            Mode::Apply => self.apply_all(&items),
         }
+    }
+
+    fn plan_all(&self, items: &[StateItem]) -> Result<()> {
+        for item in items {
+            output::print_plan_item(item);
+        }
+        output::print_plan_summary(items.len());
+        Ok(())
     }
 
     fn check_all(&self, items: &[StateItem]) -> Result<()> {
@@ -80,7 +95,7 @@ impl Runner {
                     changed += 1;
                 }
                 Err(e) => {
-                    eprintln!("✗ Failed to apply {}: {}", item, e);
+                    output::print_apply_fail(item, &e.to_string());
                     failed += 1;
                 }
             }
@@ -94,79 +109,79 @@ impl Runner {
 
         Ok(())
     }
+}
 
-    fn collect_state_items(&self, config: &Config) -> Vec<StateItem> {
-        let mut items = Vec::new();
+fn collect_state_items(config: &Config) -> Vec<StateItem> {
+    let mut items = Vec::new();
 
-        // Packages
-        if let Some(ref pkg) = config.package {
-            if let Some(ref apt) = pkg.apt {
-                for item in &apt.items {
-                    items.push(StateItem::new("package.apt", item));
-                }
-            }
-            if let Some(ref cargo) = pkg.cargo {
-                for item in &cargo.items {
-                    items.push(StateItem::new("package.cargo", item));
-                }
-            }
-            if let Some(ref go) = pkg.go {
-                for item in &go.items {
-                    items.push(StateItem::new("package.go", item));
-                }
-            }
-            if let Some(ref npm) = pkg.npm {
-                for item in &npm.items {
-                    items.push(StateItem::new("package.npm", item));
-                }
-            }
-            if let Some(ref pip) = pkg.pip {
-                for item in &pip.items {
-                    items.push(StateItem::new("package.pip", item));
-                }
+    // Packages
+    if let Some(ref pkg) = config.package {
+        if let Some(ref apt) = pkg.apt {
+            for item in &apt.items {
+                items.push(StateItem::new("package.apt", item));
             }
         }
-
-        // Services
-        for svc in &config.service {
-            let value = format!("state={},enabled={}", svc.state, svc.enabled);
-            items.push(StateItem::new("service", &svc.name).with_value(value));
-        }
-
-        // Files
-        if let Some(ref file) = config.file {
-            if let Some(ref copy) = file.copy {
-                for (src, dst) in copy {
-                    items.push(StateItem::new("file.copy", src).with_value(dst));
-                }
-            }
-            if let Some(ref symlink) = file.symlink {
-                for (src, dst) in symlink {
-                    items.push(StateItem::new("file.symlink", src).with_value(dst));
-                }
-            }
-            if let Some(ref ensure_line) = file.ensure_line {
-                for (file, lines) in ensure_line {
-                    let value = lines.join("\n");
-                    items.push(StateItem::new("file.ensure_line", file).with_value(value));
-                }
+        if let Some(ref cargo) = pkg.cargo {
+            for item in &cargo.items {
+                items.push(StateItem::new("package.cargo", item));
             }
         }
-
-        // Aliases
-        if let Some(ref aliases) = config.aliases {
-            for (name, cmd) in aliases {
-                items.push(StateItem::new("alias", name).with_value(cmd));
+        if let Some(ref go) = pkg.go {
+            for item in &go.items {
+                items.push(StateItem::new("package.go", item));
             }
         }
-
-        // Env
-        if let Some(ref env) = config.env {
-            for (name, value) in env {
-                items.push(StateItem::new("env", name).with_value(value));
+        if let Some(ref npm) = pkg.npm {
+            for item in &npm.items {
+                items.push(StateItem::new("package.npm", item));
             }
         }
-
-        items
+        if let Some(ref pip) = pkg.pip {
+            for item in &pip.items {
+                items.push(StateItem::new("package.pip", item));
+            }
+        }
     }
+
+    // Services
+    for svc in &config.service {
+        let value = format!("state={},enabled={}", svc.state, svc.enabled);
+        items.push(StateItem::new("service", &svc.name).with_value(value));
+    }
+
+    // Files
+    if let Some(ref file) = config.file {
+        if let Some(ref copy) = file.copy {
+            for (src, dst) in copy {
+                items.push(StateItem::new("file.copy", src).with_value(dst));
+            }
+        }
+        if let Some(ref symlink) = file.symlink {
+            for (src, dst) in symlink {
+                items.push(StateItem::new("file.symlink", src).with_value(dst));
+            }
+        }
+        if let Some(ref ensure_line) = file.ensure_line {
+            for (file, lines) in ensure_line {
+                let value = lines.join("\n");
+                items.push(StateItem::new("file.ensure_line", file).with_value(value));
+            }
+        }
+    }
+
+    // Aliases
+    if let Some(ref aliases) = config.aliases {
+        for (name, cmd) in aliases {
+            items.push(StateItem::new("alias", name).with_value(cmd));
+        }
+    }
+
+    // Env
+    if let Some(ref env) = config.env {
+        for (name, value) in env {
+            items.push(StateItem::new("env", name).with_value(value));
+        }
+    }
+
+    items
 }

@@ -9,7 +9,13 @@ keywords = ["cli", "automation", "environment", "workflow", "toml"]
 categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 anyhow = "1"
+owo-colors = "4"
+indicatif = "0.17"
+console = "0.15"
+dialoguer = "0.11"
+which = "7"
