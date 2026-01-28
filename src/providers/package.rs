@@ -62,6 +62,15 @@ impl Provider for CargoProvider {
 
     fn apply(&self, state: &StateItem) -> Result<()> {
         ensure_cargo()?;
+        ensure_binstall()?;
+
+        // Try binstall first (pre-compiled), fall back to install (compile)
+        let output = run_cmd("cargo", &["binstall", "-y", &state.key])?;
+        if output.status.success() {
+            return Ok(());
+        }
+
+        // Fallback to compile
         let output = run_cmd("cargo", &["install", &state.key])?;
         if !output.status.success() {
             bail!("cargo install failed: {}", String::from_utf8_lossy(&output.stderr));
@@ -81,6 +90,18 @@ fn ensure_cargo() -> Result<()> {
         if let Ok(path) = std::env::var("PATH") {
             std::env::set_var("PATH", format!("{}/.cargo/bin:{}", home, path));
         }
+    }
+    Ok(())
+}
+
+fn ensure_binstall() -> Result<()> {
+    if command_exists("cargo-binstall") {
+        return Ok(());
+    }
+    println!("  → Installing cargo-binstall...");
+    let output = run_cmd("cargo", &["install", "cargo-binstall"])?;
+    if !output.status.success() {
+        bail!("Failed to install cargo-binstall");
     }
     Ok(())
 }
