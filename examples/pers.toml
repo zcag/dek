@@ -1,13 +1,20 @@
 # Example dek configuration
 
 [package.pacman]
-items = ["tree", "git", "ripgrep"]
+items = ["git", "tree", "fzf", "bat"]
 
 [package.cargo]
 items = ["bat", "eza"]
 
 [package.go]
-items = ["github.com/junegunn/fzf@latest"]
+items = [
+  "github.com/junegunn/fzf@latest",
+  "github.com/zcag/cacheup@latest",
+  "github.com/zcag/ccsv@latest",
+  "github.com/zcag/tali@latest",
+  "github.com/zcag/goscript@latest",
+  "github.com/antonmedv/fx@latest"
+]
 
 # Services - systemd
 [[service]]

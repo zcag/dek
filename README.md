@@ -118,3 +118,15 @@ Quick one-off installs without a config file:
 dek cargo.bat cargo.eza go.fzf apt.htop
 dek --target user@host cargo.csvlens
 ```
+
+## TODO
+
+- Package name → binary name mapping: currently hardcoded (e.g. `ripgrep` → `rg`). Consider allowing config to specify binary name:
+  ```toml
+  [package.cargo]
+  items = [
+    "bat",
+    { pkg = "ripgrep", bin = "rg" },
+    { pkg = "fd-find", bin = "fd" },
+  ]
+  ```
