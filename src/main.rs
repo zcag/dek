@@ -33,17 +33,48 @@ enum Commands {
         /// Config file or directory (default: dek.toml or dek/)
         #[arg(value_name = "CONFIG")]
         config: Option<PathBuf>,
+
+        /// Sections to include (can be repeated)
+        #[arg(short, long, value_name = "SECTION")]
+        section: Vec<String>,
     },
     /// Check what would change (dry-run)
     Check {
         /// Config file or directory
         #[arg(value_name = "CONFIG")]
         config: Option<PathBuf>,
+
+        /// Sections to include (can be repeated)
+        #[arg(short, long, value_name = "SECTION")]
+        section: Vec<String>,
     },
     /// List items from config (no state check)
     Plan {
         /// Config file or directory
         #[arg(value_name = "CONFIG")]
+        config: Option<PathBuf>,
+
+        /// Sections to include (can be repeated)
+        #[arg(short, long, value_name = "SECTION")]
+        section: Vec<String>,
+    },
+    /// List available sections
+    Sections {
+        /// Config file or directory
+        #[arg(value_name = "CONFIG")]
+        config: Option<PathBuf>,
+    },
+    /// Run a command from config (no name = list commands)
+    Run {
+        /// Command name (omit to list available commands)
+        name: Option<String>,
+
+        /// Arguments to pass to the command
+        #[arg(trailing_var_arg = true)]
+        args: Vec<String>,
+
+        /// Config file or directory
+        #[arg(short, long, value_name = "CONFIG")]
         config: Option<PathBuf>,
     },
     /// Spin up container, apply config, drop into shell
@@ -89,9 +120,11 @@ fn main() -> Result<()> {
     }
 
     match cli.command {
-        Some(Commands::Apply { config }) => run_apply(config),
-        Some(Commands::Check { config }) => run_check(config),
-        Some(Commands::Plan { config }) => run_plan(config),
+        Some(Commands::Apply { config, section }) => run_apply(config, section),
+        Some(Commands::Check { config, section }) => run_check(config, section),
+        Some(Commands::Plan { config, section }) => run_plan(config, section),
+        Some(Commands::Sections { config }) => run_sections(config),
+        Some(Commands::Run { name, args, config }) => run_command(config, name, args),
         Some(Commands::Test { config, image, keep }) => run_test(config, image, keep),
         Some(Commands::Bake { config, output }) => bake::run(config, output),
         Some(Commands::Completions { shell }) => {
@@ -121,43 +154,203 @@ fn resolve_config(config: Option<PathBuf>) -> Result<PathBuf> {
     }
 }
 
-fn run_apply(config_path: Option<PathBuf>) -> Result<()> {
+fn run_apply(config_path: Option<PathBuf>, sections: Vec<String>) -> Result<()> {
     let path = resolve_config(config_path)?;
-    output::print_header(&format!("Applying {}", path.display()));
+
+    let header = if sections.is_empty() {
+        format!("Applying {}", path.display())
+    } else {
+        format!("Applying {} [{}]", path.display(), sections.join(", "))
+    };
+    output::print_header(&header);
     if let Some(info) = bake::get_bake_info() {
         println!("{}", info.dimmed());
     }
     println!();
 
-    let config = config::load(&path)?;
+    let base_config = config::load(&path)?;
+    let config = if sections.is_empty() {
+        base_config
+    } else {
+        config::apply_sections(&base_config, &sections)
+    };
+
     let runner = runner::Runner::new(runner::Mode::Apply);
-    runner.run(&config)
+    runner.run(&config, &path)
 }
 
-fn run_check(config_path: Option<PathBuf>) -> Result<()> {
+fn run_check(config_path: Option<PathBuf>, sections: Vec<String>) -> Result<()> {
     let path = resolve_config(config_path)?;
-    output::print_header(&format!("Checking {}", path.display()));
+
+    let header = if sections.is_empty() {
+        format!("Checking {}", path.display())
+    } else {
+        format!("Checking {} [{}]", path.display(), sections.join(", "))
+    };
+    output::print_header(&header);
     if let Some(info) = bake::get_bake_info() {
         println!("{}", info.dimmed());
     }
     println!();
 
-    let config = config::load(&path)?;
+    let base_config = config::load(&path)?;
+    let config = if sections.is_empty() {
+        base_config
+    } else {
+        config::apply_sections(&base_config, &sections)
+    };
+
     let runner = runner::Runner::new(runner::Mode::Check);
-    runner.run(&config)
+    runner.run(&config, &path)
 }
 
-fn run_plan(config_path: Option<PathBuf>) -> Result<()> {
+fn run_plan(config_path: Option<PathBuf>, sections: Vec<String>) -> Result<()> {
     let path = resolve_config(config_path)?;
-    output::print_header(&format!("Plan for {}", path.display()));
+
+    let header = if sections.is_empty() {
+        format!("Plan for {}", path.display())
+    } else {
+        format!("Plan for {} [{}]", path.display(), sections.join(", "))
+    };
+    output::print_header(&header);
     if let Some(info) = bake::get_bake_info() {
         println!("{}", info.dimmed());
     }
     println!();
 
-    let config = config::load(&path)?;
+    let base_config = config::load(&path)?;
+    let config = if sections.is_empty() {
+        base_config
+    } else {
+        config::apply_sections(&base_config, &sections)
+    };
+
     let runner = runner::Runner::new(runner::Mode::Plan);
-    runner.run(&config)
+    runner.run(&config, &path)
+}
+
+fn run_sections(config_path: Option<PathBuf>) -> Result<()> {
+    let path = resolve_config(config_path)?;
+    let config = config::load(&path)?;
+    let sections = config::list_sections(&config);
+
+    if sections.is_empty() {
+        println!("No sections defined in config");
+        return Ok(());
+    }
+
+    output::print_header("Sections");
+    println!();
+    for (name, desc) in sections {
+        if let Some(d) = desc {
+            println!("  {} - {}", name.bold(), d.dimmed());
+        } else {
+            println!("  {}", name.bold());
+        }
+    }
+    Ok(())
+}
+
+fn run_command(config_path: Option<PathBuf>, name: Option<String>, args: Vec<String>) -> Result<()> {
+    use crate::providers::StateItem;
+    use std::process::Command;
+
+    let path = resolve_config(config_path)?;
+    let config = config::load(&path)?;
+
+    // If no name provided, list available commands
+    let name = match name {
+        Some(n) => n,
+        None => {
+            let commands = config.run.as_ref();
+            if commands.is_none() || commands.unwrap().is_empty() {
+                println!("No run commands defined in config");
+                return Ok(());
+            }
+
+            output::print_header("Run Commands");
+            println!();
+            let mut cmds: Vec<_> = commands.unwrap().iter().collect();
+            cmds.sort_by_key(|(k, _)| *k);
+            for (cmd_name, cmd_config) in cmds {
+                if let Some(ref desc) = cmd_config.description {
+                    println!("  {} - {}", cmd_name.bold(), desc.dimmed());
+                } else {
+                    println!("  {}", cmd_name.bold());
+                }
+            }
+            return Ok(());
+        }
+    };
+
+    let base_dir = if path.is_file() {
+        path.parent().unwrap_or(std::path::Path::new(".")).to_path_buf()
+    } else {
+        path.clone()
+    };
+
+    let run_config = config.run.as_ref()
+        .and_then(|r| r.get(&name))
+        .ok_or_else(|| anyhow::anyhow!("Command '{}' not found in config", name))?;
+
+    // Install dependencies first
+    if !run_config.deps.is_empty() {
+        output::print_header(&format!("Resolving deps for {}", name));
+        println!();
+
+        let mut items = Vec::new();
+        for dep in &run_config.deps {
+            let (provider, package) = dep
+                .split_once('.')
+                .ok_or_else(|| anyhow::anyhow!("Invalid dep spec '{}'. Use provider.package", dep))?;
+
+            let kind = match provider {
+                "os" => "package.os",
+                "apt" => "package.apt",
+                "pacman" => "package.pacman",
+                "cargo" => "package.cargo",
+                "go" => "package.go",
+                "npm" => "package.npm",
+                "pip" => "package.pip",
+                _ => bail!("Unknown provider '{}' in dep '{}'", provider, dep),
+            };
+
+            items.push(StateItem::new(kind, package));
+        }
+
+        let runner = runner::Runner::new(runner::Mode::Apply);
+        runner.run_items(&items)?;
+        println!();
+    }
+
+    // Get the command to run
+    let cmd_str = if let Some(ref cmd) = run_config.cmd {
+        cmd.clone()
+    } else if let Some(ref script_path) = run_config.script {
+        let full_path = base_dir.join(script_path);
+        std::fs::read_to_string(&full_path)
+            .map_err(|e| anyhow::anyhow!("Failed to read script '{}': {}", full_path.display(), e))?
+    } else {
+        bail!("Command '{}' has neither 'cmd' nor 'script' defined", name);
+    };
+
+    // Run the command
+    // sh -c 'script' _ arg1 arg2  (underscore becomes $0, arg1 becomes $1)
+    let status = Command::new("sh")
+        .arg("-c")
+        .arg(&cmd_str)
+        .arg("_")  // $0 placeholder
+        .args(&args)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()?;
+
+    if !status.success() {
+        bail!("Command '{}' exited with status {}", name, status);
+    }
+
+    Ok(())
 }
 
 fn run_inline(specs: &[String]) -> Result<()> {

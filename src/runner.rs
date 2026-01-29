@@ -3,6 +3,7 @@ use crate::output;
 use crate::providers::{resolve_requirements, ProviderRegistry, Requirement, StateItem};
 use anyhow::{bail, Result};
 use std::collections::HashSet;
+use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Mode {
@@ -24,8 +25,13 @@ impl Runner {
         }
     }
 
-    pub fn run(&self, config: &Config) -> Result<()> {
-        let items = collect_state_items(config);
+    pub fn run(&self, config: &Config, config_path: &Path) -> Result<()> {
+        let base_dir = if config_path.is_file() {
+            config_path.parent().unwrap_or(Path::new("."))
+        } else {
+            config_path
+        };
+        let items = collect_state_items(config, base_dir);
         self.run_items(&items)
     }
 
@@ -140,7 +146,7 @@ impl Runner {
     }
 }
 
-fn collect_state_items(config: &Config) -> Vec<StateItem> {
+fn collect_state_items(config: &Config, base_dir: &Path) -> Vec<StateItem> {
     let mut items = Vec::new();
 
     // Packages
@@ -219,6 +225,23 @@ fn collect_state_items(config: &Config) -> Vec<StateItem> {
     if let Some(ref env) = config.env {
         for (name, value) in env {
             items.push(StateItem::new("env", name).with_value(value));
+        }
+    }
+
+    // Commands (check/apply)
+    for cmd in &config.command {
+        // Encode check and apply with null separator
+        let value = format!("{}\x00{}", cmd.check, cmd.apply);
+        items.push(StateItem::new("command", &cmd.name).with_value(value));
+    }
+
+    // Scripts
+    if let Some(ref scripts) = config.script {
+        for (name, path) in scripts {
+            let script_path = base_dir.join(path);
+            if let Ok(content) = std::fs::read_to_string(&script_path) {
+                items.push(StateItem::new("script", name).with_value(content));
+            }
         }
     }
 

@@ -1,0 +1,38 @@
+# Example config demonstrating new features
+
+# Main config (always applied)
+[package.os]
+items = ["git"]
+
+# Custom command with check/apply
+[[command]]
+name = "test-file"
+check = "test -f /tmp/dek-test-file"
+apply = "touch /tmp/dek-test-file"
+
+# Sections
+[sections.dev]
+description = "Development tools"
+
+[sections.dev.package.cargo]
+items = ["bat"]
+
+[sections.media]
+description = "Media utilities"
+
+[sections.media.package.os]
+items = ["tree"]
+
+# Scripts to install to ~/.local/bin
+[script]
+dek-hello = "scripts/hello.sh"
+
+# Runnable commands
+[run.hello]
+description = "Say hello"
+cmd = "echo Hello from dek! Args: $@"
+
+[run.list-files]
+description = "List files with tree"
+deps = ["os.tree"]
+cmd = "tree -L 2"

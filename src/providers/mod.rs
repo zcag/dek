@@ -1,5 +1,7 @@
+pub mod command;
 pub mod file;
 pub mod package;
+pub mod script;
 pub mod service;
 pub mod shell;
 
@@ -256,6 +258,8 @@ impl ProviderRegistry {
             Box::new(file::EnsureLineProvider),
             Box::new(shell::AliasProvider),
             Box::new(shell::EnvProvider),
+            Box::new(command::CommandProvider),
+            Box::new(script::ScriptProvider),
         ];
 
         Self { providers }
