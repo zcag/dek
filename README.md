@@ -127,8 +127,6 @@ dek bake dek/ -o mysetup          # from directory
 ./mysetup info                     # show bake info
 ```
 
-Baked binaries are ~750KB, self-contained, and show "Baked with dek on DATE by user@host".
-
 ## TODO
 
 - Package name → binary name mapping: currently hardcoded (e.g. `ripgrep` → `rg`). Consider allowing config to specify binary name:

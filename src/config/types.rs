@@ -18,6 +18,8 @@ pub struct Meta {
 #[derive(Debug, Deserialize, Default, Clone)]
 #[serde(default)]
 pub struct Config {
+    /// Per-file metadata (name, description)
+    pub meta: Option<ConfigMeta>,
     pub package: Option<PackageConfig>,
     #[serde(default)]
     pub service: Vec<ServiceConfig>,
@@ -34,8 +36,16 @@ pub struct Config {
     pub script: Option<HashMap<String, String>>,
     /// Runnable commands (dek run <name>)
     pub run: Option<HashMap<String, RunConfig>>,
-    /// Sections for grouping (dek apply <section>)
-    pub sections: Option<HashMap<String, SectionConfig>>,
+}
+
+/// Per-file metadata
+#[derive(Debug, Deserialize, Default, Clone)]
+#[serde(default)]
+pub struct ConfigMeta {
+    /// Display name for this config
+    pub name: Option<String>,
+    /// Description shown in help
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -44,6 +54,7 @@ pub struct PackageConfig {
     pub os: Option<PackageList>,
     pub apt: Option<PackageList>,
     pub pacman: Option<PackageList>,
+    pub yum: Option<PackageList>,
     pub cargo: Option<PackageList>,
     pub go: Option<PackageList>,
     pub npm: Option<PackageList>,
@@ -101,20 +112,13 @@ pub struct RunConfig {
     pub script: Option<String>,
 }
 
-/// Section containing config items (mirrors main config structure)
-#[derive(Debug, Deserialize, Default, Clone)]
-#[serde(default)]
-pub struct SectionConfig {
-    /// Description for completions/help
+/// Info about a config file (for listing)
+#[derive(Debug, Clone)]
+pub struct ConfigInfo {
+    /// File stem (e.g., "tools" from "10-tools.toml")
+    pub key: String,
+    /// Display name from meta or derived from filename
+    pub name: String,
+    /// Description from meta
     pub description: Option<String>,
-    pub package: Option<PackageConfig>,
-    #[serde(default)]
-    pub service: Vec<ServiceConfig>,
-    pub file: Option<FileConfig>,
-    #[serde(rename = "alias")]
-    pub aliases: Option<HashMap<String, String>>,
-    pub env: Option<HashMap<String, String>>,
-    #[serde(default)]
-    pub command: Vec<CommandConfig>,
-    pub script: Option<HashMap<String, String>>,
 }

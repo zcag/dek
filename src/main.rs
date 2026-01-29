@@ -28,39 +28,39 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Apply configuration
+    /// Apply configuration (all or specific configs)
     Apply {
-        /// Config file or directory (default: dek.toml or dek/)
-        #[arg(value_name = "CONFIG")]
-        config: Option<PathBuf>,
+        /// Configs to apply (e.g., "tools", "config"). Applies all if omitted.
+        #[arg(value_name = "CONFIGS")]
+        configs: Vec<String>,
 
-        /// Sections to include (can be repeated)
-        #[arg(short, long, value_name = "SECTION")]
-        section: Vec<String>,
+        /// Config directory path (default: dek.toml or dek/)
+        #[arg(short = 'C', long, value_name = "PATH")]
+        config: Option<PathBuf>,
     },
     /// Check what would change (dry-run)
     Check {
-        /// Config file or directory
-        #[arg(value_name = "CONFIG")]
-        config: Option<PathBuf>,
+        /// Configs to check
+        #[arg(value_name = "CONFIGS")]
+        configs: Vec<String>,
 
-        /// Sections to include (can be repeated)
-        #[arg(short, long, value_name = "SECTION")]
-        section: Vec<String>,
+        /// Config directory path
+        #[arg(short = 'C', long, value_name = "PATH")]
+        config: Option<PathBuf>,
     },
     /// List items from config (no state check)
     Plan {
-        /// Config file or directory
-        #[arg(value_name = "CONFIG")]
-        config: Option<PathBuf>,
+        /// Configs to plan
+        #[arg(value_name = "CONFIGS")]
+        configs: Vec<String>,
 
-        /// Sections to include (can be repeated)
-        #[arg(short, long, value_name = "SECTION")]
-        section: Vec<String>,
+        /// Config directory path
+        #[arg(short = 'C', long, value_name = "PATH")]
+        config: Option<PathBuf>,
     },
-    /// List available sections
-    Sections {
-        /// Config file or directory
+    /// List available configs
+    List {
+        /// Config directory path
         #[arg(value_name = "CONFIG")]
         config: Option<PathBuf>,
     },
@@ -73,8 +73,8 @@ enum Commands {
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
 
-        /// Config file or directory
-        #[arg(short, long, value_name = "CONFIG")]
+        /// Config directory path
+        #[arg(short = 'C', long, value_name = "PATH")]
         config: Option<PathBuf>,
     },
     /// Spin up container, apply config, drop into shell
@@ -120,10 +120,10 @@ fn main() -> Result<()> {
     }
 
     match cli.command {
-        Some(Commands::Apply { config, section }) => run_apply(config, section),
-        Some(Commands::Check { config, section }) => run_check(config, section),
-        Some(Commands::Plan { config, section }) => run_plan(config, section),
-        Some(Commands::Sections { config }) => run_sections(config),
+        Some(Commands::Apply { config, configs }) => run_apply(config, configs),
+        Some(Commands::Check { config, configs }) => run_check(config, configs),
+        Some(Commands::Plan { config, configs }) => run_plan(config, configs),
+        Some(Commands::List { config }) => run_list(config),
         Some(Commands::Run { name, args, config }) => run_command(config, name, args),
         Some(Commands::Test { config, image, keep }) => run_test(config, image, keep),
         Some(Commands::Bake { config, output }) => bake::run(config, output),
@@ -133,7 +133,13 @@ fn main() -> Result<()> {
         }
         Some(Commands::Setup) => run_setup(),
         None => {
-            // No command and no inline args - show help
+            // No command - show rich help
+            let config_path = bake::check_embedded().or_else(config::find_default_config);
+            if let Some(path) = config_path {
+                let meta = config::load_meta(&path);
+                return print_rich_help(meta.as_ref(), &path);
+            }
+            // No config found - show basic clap help
             Cli::command().print_help()?;
             Ok(())
         }
@@ -154,98 +160,115 @@ fn resolve_config(config: Option<PathBuf>) -> Result<PathBuf> {
     }
 }
 
-fn run_apply(config_path: Option<PathBuf>, sections: Vec<String>) -> Result<()> {
+fn run_apply(config_path: Option<PathBuf>, configs: Vec<String>) -> Result<()> {
     let path = resolve_config(config_path)?;
+    let meta = config::load_meta(&path);
 
-    let header = if sections.is_empty() {
-        format!("Applying {}", path.display())
+    // Show banner or default header
+    if let Some(banner) = meta.as_ref().and_then(|m| m.banner.as_ref()) {
+        println!("{}", banner.bold());
     } else {
-        format!("Applying {} [{}]", path.display(), sections.join(", "))
-    };
-    output::print_header(&header);
+        let header = if configs.is_empty() {
+            format!("Applying {}", path.display())
+        } else {
+            format!("Applying [{}]", configs.join(", "))
+        };
+        output::print_header(&header);
+    }
     if let Some(info) = bake::get_bake_info() {
         println!("{}", info.dimmed());
     }
     println!();
 
-    let base_config = config::load(&path)?;
-    let config = if sections.is_empty() {
-        base_config
+    let config = if configs.is_empty() {
+        config::load(&path)?
     } else {
-        config::apply_sections(&base_config, &sections)
+        config::load_selected(&path, &configs)?
     };
 
     let runner = runner::Runner::new(runner::Mode::Apply);
     runner.run(&config, &path)
 }
 
-fn run_check(config_path: Option<PathBuf>, sections: Vec<String>) -> Result<()> {
+fn run_check(config_path: Option<PathBuf>, configs: Vec<String>) -> Result<()> {
     let path = resolve_config(config_path)?;
+    let meta = config::load_meta(&path);
 
-    let header = if sections.is_empty() {
-        format!("Checking {}", path.display())
+    if let Some(banner) = meta.as_ref().and_then(|m| m.banner.as_ref()) {
+        println!("{}", banner.bold());
     } else {
-        format!("Checking {} [{}]", path.display(), sections.join(", "))
-    };
-    output::print_header(&header);
+        let header = if configs.is_empty() {
+            format!("Checking {}", path.display())
+        } else {
+            format!("Checking [{}]", configs.join(", "))
+        };
+        output::print_header(&header);
+    }
     if let Some(info) = bake::get_bake_info() {
         println!("{}", info.dimmed());
     }
     println!();
 
-    let base_config = config::load(&path)?;
-    let config = if sections.is_empty() {
-        base_config
+    let config = if configs.is_empty() {
+        config::load(&path)?
     } else {
-        config::apply_sections(&base_config, &sections)
+        config::load_selected(&path, &configs)?
     };
 
     let runner = runner::Runner::new(runner::Mode::Check);
     runner.run(&config, &path)
 }
 
-fn run_plan(config_path: Option<PathBuf>, sections: Vec<String>) -> Result<()> {
+fn run_plan(config_path: Option<PathBuf>, configs: Vec<String>) -> Result<()> {
     let path = resolve_config(config_path)?;
+    let meta = config::load_meta(&path);
 
-    let header = if sections.is_empty() {
-        format!("Plan for {}", path.display())
+    if let Some(banner) = meta.as_ref().and_then(|m| m.banner.as_ref()) {
+        println!("{}", banner.bold());
     } else {
-        format!("Plan for {} [{}]", path.display(), sections.join(", "))
-    };
-    output::print_header(&header);
+        let header = if configs.is_empty() {
+            format!("Plan for {}", path.display())
+        } else {
+            format!("Plan for [{}]", configs.join(", "))
+        };
+        output::print_header(&header);
+    }
     if let Some(info) = bake::get_bake_info() {
         println!("{}", info.dimmed());
     }
     println!();
 
-    let base_config = config::load(&path)?;
-    let config = if sections.is_empty() {
-        base_config
+    let config = if configs.is_empty() {
+        config::load(&path)?
     } else {
-        config::apply_sections(&base_config, &sections)
+        config::load_selected(&path, &configs)?
     };
 
     let runner = runner::Runner::new(runner::Mode::Plan);
     runner.run(&config, &path)
 }
 
-fn run_sections(config_path: Option<PathBuf>) -> Result<()> {
+fn run_list(config_path: Option<PathBuf>) -> Result<()> {
     let path = resolve_config(config_path)?;
-    let config = config::load(&path)?;
-    let sections = config::list_sections(&config);
+    let configs = config::list_configs(&path)?;
 
-    if sections.is_empty() {
-        println!("No sections defined in config");
+    if configs.is_empty() {
+        println!("No config files found");
         return Ok(());
     }
 
-    output::print_header("Sections");
+    output::print_header("Available configs");
     println!();
-    for (name, desc) in sections {
-        if let Some(d) = desc {
-            println!("  {} - {}", name.bold(), d.dimmed());
+    for cfg in configs {
+        let label = if cfg.name != cfg.key {
+            format!("{} ({})", cfg.key, cfg.name)
         } else {
-            println!("  {}", name.bold());
+            cfg.key
+        };
+        if let Some(d) = cfg.description {
+            println!("  {} - {}", label.green(), d.dimmed());
+        } else {
+            println!("  {}", label.green());
         }
     }
     Ok(())
@@ -460,11 +483,11 @@ fn run_test(config_path: Option<PathBuf>, image: String, keep: bool) -> Result<(
         "/config".to_string()
     };
 
-    // Run shell with dek apply
+    // Run shell with dek apply (always drop into shell even if apply fails)
     args.push("sh".to_string());
     args.push("-c".to_string());
     args.push(format!(
-        r#"dek apply {} && echo "" && echo "Dropping into shell..." && exec sh"#,
+        r#"dek apply -C {}; echo ""; echo "Dropping into shell..."; exec sh"#,
         config_in_container
     ));
 
@@ -580,4 +603,80 @@ fn detect_shell() -> String {
         }
     }
     "bash".to_string()
+}
+
+fn print_rich_help(meta: Option<&config::Meta>, config_path: &PathBuf) -> Result<()> {
+    let exe_name = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+        .unwrap_or_else(|| "dek".to_string());
+
+    let name = meta.and_then(|m| m.name.as_deref()).unwrap_or(&exe_name);
+    let cfg = config::load(config_path)?;
+    let configs = config::list_configs(config_path)?;
+
+    // Banner or header
+    if let Some(banner) = meta.and_then(|m| m.banner.as_ref()) {
+        println!();
+        println!("  {}", banner.bold());
+    } else {
+        println!();
+        println!("  {}", name.bold());
+    }
+    if let Some(desc) = meta.and_then(|m| m.description.as_ref()) {
+        println!("  {}", desc.dimmed());
+    }
+    if let Some(version) = meta.and_then(|m| m.version.as_ref()) {
+        println!("  {}", format!("v{}", version).dimmed());
+    }
+    println!();
+
+    // Usage
+    println!("  {}", "USAGE".dimmed());
+    println!("    {} {}", exe_name.cyan(), "apply".white());
+    if !configs.is_empty() {
+        let example_keys: Vec<_> = configs.iter().take(2).map(|c| c.key.as_str()).collect();
+        println!("    {} {} {}", exe_name.cyan(), "apply".white(), example_keys.join(" ").dimmed());
+    }
+    println!("    {} {}", exe_name.cyan(), "check".white());
+    println!("    {} {} {}", exe_name.cyan(), "run".white(), "<command>".dimmed());
+    println!("    {} {}", exe_name.cyan(), "test".white());
+    println!();
+
+    // Available configs
+    if !configs.is_empty() {
+        println!("  {}", "CONFIGS".dimmed());
+        for cfg_info in &configs {
+            let label = if cfg_info.name != cfg_info.key {
+                format!("{} ({})", cfg_info.key, cfg_info.name)
+            } else {
+                cfg_info.key.clone()
+            };
+            if let Some(d) = &cfg_info.description {
+                println!("    {}  {}", label.green(), d.dimmed());
+            } else {
+                println!("    {}", label.green());
+            }
+        }
+        println!();
+    }
+
+    // Run commands
+    if let Some(run) = &cfg.run {
+        if !run.is_empty() {
+            println!("  {}", "COMMANDS".dimmed());
+            let mut cmds: Vec<_> = run.iter().collect();
+            cmds.sort_by_key(|(k, _)| *k);
+            for (cmd_name, rc) in cmds {
+                if let Some(d) = &rc.description {
+                    println!("    {}  {}", cmd_name.yellow(), d.dimmed());
+                } else {
+                    println!("    {}", cmd_name.yellow());
+                }
+            }
+            println!();
+        }
+    }
+
+    Ok(())
 }

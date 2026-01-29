@@ -6,14 +6,51 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::Path;
 
+/// Load all configs from path (merges all .toml files if directory)
 pub fn load<P: AsRef<Path>>(path: P) -> Result<Config> {
     let path = path.as_ref();
-
     if path.is_dir() {
-        load_directory(path)
+        load_directory(path, None)
     } else {
         load_file(path)
     }
+}
+
+/// Load specific configs by key (e.g., "tools", "config")
+/// Key is derived from filename: "10-tools.toml" -> "tools"
+pub fn load_selected<P: AsRef<Path>>(path: P, keys: &[String]) -> Result<Config> {
+    let path = path.as_ref();
+    if path.is_dir() {
+        load_directory(path, Some(keys))
+    } else {
+        // Single file - just load it
+        load_file(path)
+    }
+}
+
+/// List available config files with their metadata
+pub fn list_configs<P: AsRef<Path>>(path: P) -> Result<Vec<ConfigInfo>> {
+    let path = path.as_ref();
+    if !path.is_dir() {
+        return Ok(vec![]);
+    }
+
+    let mut configs = Vec::new();
+    for entry in get_config_entries(path)? {
+        let key = file_key(&entry.path());
+        if key == "meta" {
+            continue; // Skip meta.toml
+        }
+        let config = load_file(&entry.path())?;
+        let name = config
+            .meta
+            .as_ref()
+            .and_then(|m| m.name.clone())
+            .unwrap_or_else(|| key.clone());
+        let description = config.meta.as_ref().and_then(|m| m.description.clone());
+        configs.push(ConfigInfo { key, name, description });
+    }
+    Ok(configs)
 }
 
 fn load_file(path: &Path) -> Result<Config> {
@@ -24,9 +61,30 @@ fn load_file(path: &Path) -> Result<Config> {
     Ok(config)
 }
 
-fn load_directory(dir: &Path) -> Result<Config> {
+fn load_directory(dir: &Path, filter_keys: Option<&[String]>) -> Result<Config> {
     let mut merged = Config::default();
 
+    for entry in get_config_entries(dir)? {
+        let key = file_key(&entry.path());
+        if key == "meta" {
+            continue; // Skip meta.toml
+        }
+
+        // Filter by keys if specified
+        if let Some(keys) = filter_keys {
+            if !keys.iter().any(|k| k == &key) {
+                continue;
+            }
+        }
+
+        let config = load_file(&entry.path())?;
+        merge_config(&mut merged, config);
+    }
+
+    Ok(merged)
+}
+
+fn get_config_entries(dir: &Path) -> Result<Vec<fs::DirEntry>> {
     let mut entries: Vec<_> = fs::read_dir(dir)
         .with_context(|| format!("Failed to read config directory: {}", dir.display()))?
         .filter_map(|e| e.ok())
@@ -37,42 +95,34 @@ fn load_directory(dir: &Path) -> Result<Config> {
                 .unwrap_or(false)
         })
         .collect();
-
     entries.sort_by_key(|e| e.path());
+    Ok(entries)
+}
 
-    for entry in entries {
-        let config = load_file(&entry.path())?;
-        merge_config(&mut merged, config);
+/// Extract key from filename: "10-tools.toml" -> "tools", "config.toml" -> "config"
+fn file_key(path: &Path) -> String {
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    // Strip numeric prefix like "10-", "00-"
+    if let Some(pos) = stem.find('-') {
+        if stem[..pos].chars().all(|c| c.is_ascii_digit()) {
+            return stem[pos + 1..].to_string();
+        }
     }
-
-    Ok(merged)
+    stem.to_string()
 }
 
 fn merge_config(base: &mut Config, other: Config) {
     // Merge packages
     if let Some(pkg) = other.package {
         let base_pkg = base.package.get_or_insert_with(PackageConfig::default);
-        if pkg.os.is_some() {
-            base_pkg.os = pkg.os;
-        }
-        if pkg.apt.is_some() {
-            base_pkg.apt = pkg.apt;
-        }
-        if pkg.pacman.is_some() {
-            base_pkg.pacman = pkg.pacman;
-        }
-        if pkg.cargo.is_some() {
-            base_pkg.cargo = pkg.cargo;
-        }
-        if pkg.go.is_some() {
-            base_pkg.go = pkg.go;
-        }
-        if pkg.npm.is_some() {
-            base_pkg.npm = pkg.npm;
-        }
-        if pkg.pip.is_some() {
-            base_pkg.pip = pkg.pip;
-        }
+        merge_package_list(&mut base_pkg.os, pkg.os);
+        merge_package_list(&mut base_pkg.apt, pkg.apt);
+        merge_package_list(&mut base_pkg.pacman, pkg.pacman);
+        merge_package_list(&mut base_pkg.yum, pkg.yum);
+        merge_package_list(&mut base_pkg.cargo, pkg.cargo);
+        merge_package_list(&mut base_pkg.go, pkg.go);
+        merge_package_list(&mut base_pkg.npm, pkg.npm);
+        merge_package_list(&mut base_pkg.pip, pkg.pip);
     }
 
     // Merge services
@@ -122,174 +172,13 @@ fn merge_config(base: &mut Config, other: Config) {
     if let Some(run) = other.run {
         base.run.get_or_insert_with(Default::default).extend(run);
     }
-
-    // Merge sections
-    if let Some(sections) = other.sections {
-        let base_sections = base.sections.get_or_insert_with(Default::default);
-        for (name, section) in sections {
-            // If section exists, merge; otherwise insert
-            if let Some(base_section) = base_sections.get_mut(&name) {
-                merge_section(base_section, section);
-            } else {
-                base_sections.insert(name, section);
-            }
-        }
-    }
 }
 
-fn merge_section(base: &mut SectionConfig, other: SectionConfig) {
-    // Description: override if set
-    if other.description.is_some() {
-        base.description = other.description;
-    }
-
-    // Merge packages
-    if let Some(pkg) = other.package {
-        let base_pkg = base.package.get_or_insert_with(PackageConfig::default);
-        if pkg.os.is_some() { base_pkg.os = pkg.os; }
-        if pkg.apt.is_some() { base_pkg.apt = pkg.apt; }
-        if pkg.pacman.is_some() { base_pkg.pacman = pkg.pacman; }
-        if pkg.cargo.is_some() { base_pkg.cargo = pkg.cargo; }
-        if pkg.go.is_some() { base_pkg.go = pkg.go; }
-        if pkg.npm.is_some() { base_pkg.npm = pkg.npm; }
-        if pkg.pip.is_some() { base_pkg.pip = pkg.pip; }
-    }
-
-    // Merge services
-    base.service.extend(other.service);
-
-    // Merge files
-    if let Some(file) = other.file {
-        let base_file = base.file.get_or_insert_with(FileConfig::default);
-        if let Some(copy) = file.copy {
-            base_file.copy.get_or_insert_with(Default::default).extend(copy);
-        }
-        if let Some(symlink) = file.symlink {
-            base_file.symlink.get_or_insert_with(Default::default).extend(symlink);
-        }
-        if let Some(ensure_line) = file.ensure_line {
-            base_file.ensure_line.get_or_insert_with(Default::default).extend(ensure_line);
-        }
-    }
-
-    // Merge aliases
-    if let Some(aliases) = other.aliases {
-        base.aliases.get_or_insert_with(Default::default).extend(aliases);
-    }
-
-    // Merge env
-    if let Some(env) = other.env {
-        base.env.get_or_insert_with(Default::default).extend(env);
-    }
-
-    // Merge commands
-    base.command.extend(other.command);
-
-    // Merge scripts
-    if let Some(script) = other.script {
-        base.script.get_or_insert_with(Default::default).extend(script);
-    }
-}
-
-/// Get list of available sections with descriptions
-pub fn list_sections(config: &Config) -> Vec<(&str, Option<&str>)> {
-    config.sections.as_ref().map_or(vec![], |sections| {
-        let mut list: Vec<_> = sections
-            .iter()
-            .map(|(name, sec)| (name.as_str(), sec.description.as_deref()))
-            .collect();
-        list.sort_by_key(|(name, _)| *name);
-        list
-    })
-}
-
-/// Apply sections to a base config, returning merged config
-pub fn apply_sections(config: &Config, section_names: &[String]) -> Config {
-    let mut result = Config {
-        package: config.package.clone(),
-        service: config.service.clone(),
-        file: config.file.clone(),
-        aliases: config.aliases.clone(),
-        env: config.env.clone(),
-        timezone: config.timezone.clone(),
-        hostname: config.hostname.clone(),
-        command: config.command.clone(),
-        script: config.script.clone(),
-        run: config.run.clone(),
-        sections: None, // Don't include sections in result
-    };
-
-    if let Some(sections) = &config.sections {
-        for name in section_names {
-            if let Some(section) = sections.get(name) {
-                apply_section_to_config(&mut result, section);
-            }
-        }
-    }
-
-    result
-}
-
-fn apply_section_to_config(config: &mut Config, section: &SectionConfig) {
-    // Merge packages
-    if let Some(pkg) = &section.package {
-        let base_pkg = config.package.get_or_insert_with(PackageConfig::default);
-        if let Some(ref os) = pkg.os {
-            base_pkg.os.get_or_insert_with(|| PackageList { items: vec![] }).items.extend(os.items.clone());
-        }
-        if let Some(ref apt) = pkg.apt {
-            base_pkg.apt.get_or_insert_with(|| PackageList { items: vec![] }).items.extend(apt.items.clone());
-        }
-        if let Some(ref pacman) = pkg.pacman {
-            base_pkg.pacman.get_or_insert_with(|| PackageList { items: vec![] }).items.extend(pacman.items.clone());
-        }
-        if let Some(ref cargo) = pkg.cargo {
-            base_pkg.cargo.get_or_insert_with(|| PackageList { items: vec![] }).items.extend(cargo.items.clone());
-        }
-        if let Some(ref go) = pkg.go {
-            base_pkg.go.get_or_insert_with(|| PackageList { items: vec![] }).items.extend(go.items.clone());
-        }
-        if let Some(ref npm) = pkg.npm {
-            base_pkg.npm.get_or_insert_with(|| PackageList { items: vec![] }).items.extend(npm.items.clone());
-        }
-        if let Some(ref pip) = pkg.pip {
-            base_pkg.pip.get_or_insert_with(|| PackageList { items: vec![] }).items.extend(pip.items.clone());
-        }
-    }
-
-    // Merge services
-    config.service.extend(section.service.clone());
-
-    // Merge files
-    if let Some(file) = &section.file {
-        let base_file = config.file.get_or_insert_with(FileConfig::default);
-        if let Some(ref copy) = file.copy {
-            base_file.copy.get_or_insert_with(Default::default).extend(copy.clone());
-        }
-        if let Some(ref symlink) = file.symlink {
-            base_file.symlink.get_or_insert_with(Default::default).extend(symlink.clone());
-        }
-        if let Some(ref ensure_line) = file.ensure_line {
-            base_file.ensure_line.get_or_insert_with(Default::default).extend(ensure_line.clone());
-        }
-    }
-
-    // Merge aliases
-    if let Some(ref aliases) = section.aliases {
-        config.aliases.get_or_insert_with(Default::default).extend(aliases.clone());
-    }
-
-    // Merge env
-    if let Some(ref env) = section.env {
-        config.env.get_or_insert_with(Default::default).extend(env.clone());
-    }
-
-    // Merge commands
-    config.command.extend(section.command.clone());
-
-    // Merge scripts
-    if let Some(ref script) = section.script {
-        config.script.get_or_insert_with(Default::default).extend(script.clone());
+fn merge_package_list(base: &mut Option<PackageList>, other: Option<PackageList>) {
+    if let Some(other_list) = other {
+        base.get_or_insert_with(|| PackageList { items: vec![] })
+            .items
+            .extend(other_list.items);
     }
 }
 
