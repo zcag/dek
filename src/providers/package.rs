@@ -23,7 +23,7 @@ impl Provider for OsProvider {
                 let output = run_cmd("dpkg-query", &["-W", "-f=${Status}", &state.key])?;
                 String::from_utf8_lossy(&output.stdout).contains("install ok installed")
             }
-            SysPkgManager::Dnf => run_cmd_ok("rpm", &["-q", &state.key]),
+            SysPkgManager::Dnf | SysPkgManager::Yum => run_cmd_ok("rpm", &["-q", &state.key]),
             SysPkgManager::Brew => run_cmd_ok("brew", &["list", &state.key]),
         };
 

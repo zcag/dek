@@ -66,6 +66,7 @@ pub enum SysPkgManager {
     Apt,
     Pacman,
     Dnf,
+    Yum,
     Brew,
 }
 
@@ -78,6 +79,8 @@ impl SysPkgManager {
             Some(Self::Apt)
         } else if command_exists("dnf") {
             Some(Self::Dnf)
+        } else if command_exists("yum") {
+            Some(Self::Yum)
         } else if command_exists("brew") {
             Some(Self::Brew)
         } else {
@@ -91,6 +94,7 @@ impl SysPkgManager {
             Self::Pacman => run_sudo("pacman", &["-Sy", "--noconfirm", pkg])?,
             Self::Apt => run_sudo("apt-get", &["install", "-y", pkg])?,
             Self::Dnf => run_sudo("dnf", &["install", "-y", pkg])?,
+            Self::Yum => run_sudo("yum", &["install", "-y", pkg])?,
             Self::Brew => run_cmd("brew", &["install", pkg])?,
         };
 
@@ -111,17 +115,17 @@ impl SysPkgManager {
             // Go
             (Self::Pacman, "go") => "go",
             (Self::Apt, "go") => "golang",
-            (Self::Dnf, "go") => "golang",
+            (Self::Dnf | Self::Yum, "go") => "golang",
             (Self::Brew, "go") => "go",
             // Node/npm
             (Self::Pacman, "npm") => "npm",
             (Self::Apt, "npm") => "npm",
-            (Self::Dnf, "npm") => "npm",
+            (Self::Dnf | Self::Yum, "npm") => "npm",
             (Self::Brew, "npm") => "node",
             // Python/pip
             (Self::Pacman, "pip") => "python-pip",
             (Self::Apt, "pip") => "python3-pip",
-            (Self::Dnf, "pip") => "python3-pip",
+            (Self::Dnf | Self::Yum, "pip") => "python3-pip",
             (Self::Brew, "pip") => "python",
             // Default: use the tool name
             _ => tool,
