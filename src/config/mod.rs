@@ -306,3 +306,17 @@ pub fn find_default_config() -> Option<std::path::PathBuf> {
 
     None
 }
+
+/// Load meta.toml from config path (file's parent dir or directory itself)
+pub fn load_meta<P: AsRef<Path>>(config_path: P) -> Option<Meta> {
+    let path = config_path.as_ref();
+    let dir = if path.is_dir() { path } else { path.parent()? };
+    let meta_path = dir.join("meta.toml");
+
+    if !meta_path.exists() {
+        return None;
+    }
+
+    let content = fs::read_to_string(&meta_path).ok()?;
+    toml::from_str(&content).ok()
+}

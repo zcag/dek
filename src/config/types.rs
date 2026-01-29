@@ -1,6 +1,20 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 
+/// Metadata for baked binaries (loaded from meta.toml)
+#[derive(Debug, Deserialize, Default, Clone)]
+#[serde(default)]
+pub struct Meta {
+    /// Name shown in help/banner (defaults to binary name)
+    pub name: Option<String>,
+    /// Description for --help
+    pub description: Option<String>,
+    /// Version string
+    pub version: Option<String>,
+    /// Banner text shown on apply
+    pub banner: Option<String>,
+}
+
 #[derive(Debug, Deserialize, Default, Clone)]
 #[serde(default)]
 pub struct Config {
