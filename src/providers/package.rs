@@ -126,7 +126,7 @@ impl Provider for CargoProvider {
     }
 
     fn check(&self, state: &StateItem) -> Result<CheckResult> {
-        let bin_name = cargo_bin_name(&state.key);
+        let (_, bin_name) = parse_cargo_spec(&state.key);
         if command_exists(&bin_name) {
             Ok(CheckResult::Satisfied)
         } else {
@@ -137,17 +137,29 @@ impl Provider for CargoProvider {
     }
 
     fn apply(&self, state: &StateItem) -> Result<()> {
+        let (pkg_name, _) = parse_cargo_spec(&state.key);
+
         // Try binstall first (pre-compiled), fall back to install (compile)
-        let output = run_cmd("cargo", &["binstall", "-y", &state.key])?;
+        let output = run_cmd("cargo", &["binstall", "-y", &pkg_name])?;
         if output.status.success() {
             return Ok(());
         }
 
-        let output = run_cmd("cargo", &["install", &state.key])?;
+        let output = run_cmd("cargo", &["install", &pkg_name])?;
         if !output.status.success() {
             bail!("cargo install failed: {}", String::from_utf8_lossy(&output.stderr));
         }
         Ok(())
+    }
+}
+
+/// Parse cargo spec: "pkg:bin" or "pkg" (bin defaults to pkg or known mapping)
+fn parse_cargo_spec(spec: &str) -> (String, String) {
+    if let Some((pkg, bin)) = spec.split_once(':') {
+        (pkg.to_string(), bin.to_string())
+    } else {
+        let bin = cargo_bin_name(spec);
+        (spec.to_string(), bin)
     }
 }
 
