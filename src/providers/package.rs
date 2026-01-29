@@ -119,7 +119,10 @@ impl Provider for CargoProvider {
     }
 
     fn requires(&self) -> Vec<Requirement> {
-        vec![Requirement::binary("cargo", InstallMethod::Rustup)]
+        vec![
+            Requirement::binary("cargo", InstallMethod::Rustup),
+            Requirement::binary("cargo-binstall", InstallMethod::CargoBinstall),
+        ]
     }
 
     fn check(&self, state: &StateItem) -> Result<CheckResult> {
@@ -134,12 +137,10 @@ impl Provider for CargoProvider {
     }
 
     fn apply(&self, state: &StateItem) -> Result<()> {
-        // Try binstall first (pre-compiled) if available, fall back to install (compile)
-        if command_exists("cargo-binstall") {
-            let output = run_cmd("cargo", &["binstall", "-y", &state.key])?;
-            if output.status.success() {
-                return Ok(());
-            }
+        // Try binstall first (pre-compiled), fall back to install (compile)
+        let output = run_cmd("cargo", &["binstall", "-y", &state.key])?;
+        if output.status.success() {
+            return Ok(());
         }
 
         let output = run_cmd("cargo", &["install", &state.key])?;

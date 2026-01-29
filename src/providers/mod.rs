@@ -69,6 +69,8 @@ impl fmt::Display for StateItem {
 pub enum InstallMethod {
     /// Install via rustup (curl script)
     Rustup,
+    /// Install cargo-binstall via its install script (pre-compiled)
+    CargoBinstall,
     /// Install via cargo install
     Cargo(&'static str),
     /// Install via system package manager
@@ -119,6 +121,25 @@ impl Requirement {
                         std::env::set_var("PATH", &cargo_bin);
                     }
                     // Verify binary exists directly (don't rely on which)
+                    let binary_path = format!("{}/{}", cargo_bin, self.binary);
+                    if std::path::Path::new(&binary_path).exists() {
+                        return Ok(());
+                    }
+                }
+            }
+            InstallMethod::CargoBinstall => {
+                run_install_script(
+                    "https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh",
+                    &[],
+                )?;
+                // Add cargo bin to PATH and verify
+                if let Ok(home) = std::env::var("HOME") {
+                    let cargo_bin = format!("{}/.cargo/bin", home);
+                    if let Ok(path) = std::env::var("PATH") {
+                        if !path.contains(&cargo_bin) {
+                            std::env::set_var("PATH", format!("{}:{}", cargo_bin, path));
+                        }
+                    }
                     let binary_path = format!("{}/{}", cargo_bin, self.binary);
                     if std::path::Path::new(&binary_path).exists() {
                         return Ok(());

@@ -37,8 +37,12 @@ pub fn run_cmd_ok(cmd: &str, args: &[&str]) -> bool {
         .unwrap_or(false)
 }
 
-/// Run a command with sudo
+/// Run a command with sudo (or directly if already root)
 pub fn run_sudo(cmd: &str, args: &[&str]) -> Result<Output> {
+    // Skip sudo if running as root
+    if unsafe { libc::geteuid() } == 0 {
+        return run_cmd(cmd, args);
+    }
     let mut sudo_args = vec![cmd];
     sudo_args.extend(args);
     run_cmd("sudo", &sudo_args)
@@ -53,11 +57,7 @@ pub fn run_cmd_stdout(cmd: &str, args: &[&str]) -> Result<String> {
 
 /// Check if a command exists
 pub fn command_exists(cmd: &str) -> bool {
-    Command::new("which")
-        .arg(cmd)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    which::which(cmd).is_ok()
 }
 
 /// Detected system package manager
@@ -88,7 +88,7 @@ impl SysPkgManager {
     /// Install a package using this package manager
     pub fn install(&self, pkg: &str) -> Result<()> {
         let output = match self {
-            Self::Pacman => run_sudo("pacman", &["-S", "--noconfirm", pkg])?,
+            Self::Pacman => run_sudo("pacman", &["-Sy", "--noconfirm", pkg])?,
             Self::Apt => run_sudo("apt-get", &["install", "-y", pkg])?,
             Self::Dnf => run_sudo("dnf", &["install", "-y", pkg])?,
             Self::Brew => run_cmd("brew", &["install", pkg])?,
