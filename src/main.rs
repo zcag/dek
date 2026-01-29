@@ -399,20 +399,23 @@ fn run_test(config_path: Option<PathBuf>, image: String, keep: bool) -> Result<(
     output::print_header(&format!("Testing {} in {}", config_path.display(), image));
     println!();
 
-    // Build dek binary
-    println!("  {} Building dek...", "→".yellow());
-    let build_status = Command::new("cargo")
-        .args(["build", "--release", "--quiet"])
-        .status()?;
-    if !build_status.success() {
-        bail!("cargo build failed");
-    }
-
-    // Find the built binary
-    let dek_binary = cwd.join("target/release/dek");
-    if !dek_binary.exists() {
-        bail!("dek binary not found at {}", dek_binary.display());
-    }
+    // Get dek binary - use current exe if baked, otherwise build from source
+    let dek_binary = if cwd.join("Cargo.toml").exists() {
+        println!("  {} Building dek...", "→".yellow());
+        let build_status = Command::new("cargo")
+            .args(["build", "--release", "--quiet"])
+            .status()?;
+        if !build_status.success() {
+            bail!("cargo build failed");
+        }
+        let binary = cwd.join("target/release/dek");
+        if !binary.exists() {
+            bail!("dek binary not found at {}", binary.display());
+        }
+        binary
+    } else {
+        std::env::current_exe()?
+    };
 
     // Build docker args
     let container_name = format!("dek-test-{}", std::process::id());
