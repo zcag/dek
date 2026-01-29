@@ -146,6 +146,14 @@ impl Runner {
     }
 }
 
+fn resolve_source_path(src: &str, base_dir: &Path) -> String {
+    if src.starts_with('/') || src.starts_with('~') {
+        src.to_string()
+    } else {
+        base_dir.join(src).to_string_lossy().to_string()
+    }
+}
+
 fn collect_state_items(config: &Config, base_dir: &Path) -> Vec<StateItem> {
     let mut items = Vec::new();
 
@@ -198,12 +206,14 @@ fn collect_state_items(config: &Config, base_dir: &Path) -> Vec<StateItem> {
     if let Some(ref file) = config.file {
         if let Some(ref copy) = file.copy {
             for (src, dst) in copy {
-                items.push(StateItem::new("file.copy", src).with_value(dst));
+                let src_resolved = resolve_source_path(src, base_dir);
+                items.push(StateItem::new("file.copy", &src_resolved).with_value(dst));
             }
         }
         if let Some(ref symlink) = file.symlink {
             for (src, dst) in symlink {
-                items.push(StateItem::new("file.symlink", src).with_value(dst));
+                let src_resolved = resolve_source_path(src, base_dir);
+                items.push(StateItem::new("file.symlink", &src_resolved).with_value(dst));
             }
         }
         if let Some(ref ensure_line) = file.ensure_line {
