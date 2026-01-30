@@ -121,4 +121,6 @@ pub struct ConfigInfo {
     pub name: String,
     /// Description from meta
     pub description: Option<String>,
+    /// Whether this is in optional/ (not applied by default)
+    pub optional: bool,
 }

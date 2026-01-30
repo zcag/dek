@@ -18,10 +18,11 @@ pub fn load<P: AsRef<Path>>(path: P) -> Result<Config> {
 
 /// Load specific configs by key (e.g., "tools", "config")
 /// Key is derived from filename: "10-tools.toml" -> "tools"
+/// Also searches optional/ subdirectory
 pub fn load_selected<P: AsRef<Path>>(path: P, keys: &[String]) -> Result<Config> {
     let path = path.as_ref();
     if path.is_dir() {
-        load_directory(path, Some(keys))
+        load_directory_with_optional(path, Some(keys))
     } else {
         // Single file - just load it
         load_file(path)
@@ -36,10 +37,12 @@ pub fn list_configs<P: AsRef<Path>>(path: P) -> Result<Vec<ConfigInfo>> {
     }
 
     let mut configs = Vec::new();
+
+    // Main configs
     for entry in get_config_entries(path)? {
         let key = file_key(&entry.path());
         if key == "meta" {
-            continue; // Skip meta.toml
+            continue;
         }
         let config = load_file(&entry.path())?;
         let name = config
@@ -48,8 +51,28 @@ pub fn list_configs<P: AsRef<Path>>(path: P) -> Result<Vec<ConfigInfo>> {
             .and_then(|m| m.name.clone())
             .unwrap_or_else(|| key.clone());
         let description = config.meta.as_ref().and_then(|m| m.description.clone());
-        configs.push(ConfigInfo { key, name, description });
+        configs.push(ConfigInfo { key, name, description, optional: false });
     }
+
+    // Optional configs
+    let optional_dir = path.join("optional");
+    if optional_dir.is_dir() {
+        for entry in get_config_entries(&optional_dir)? {
+            let key = file_key(&entry.path());
+            if key == "meta" {
+                continue;
+            }
+            let config = load_file(&entry.path())?;
+            let name = config
+                .meta
+                .as_ref()
+                .and_then(|m| m.name.clone())
+                .unwrap_or_else(|| key.clone());
+            let description = config.meta.as_ref().and_then(|m| m.description.clone());
+            configs.push(ConfigInfo { key, name, description, optional: true });
+        }
+    }
+
     Ok(configs)
 }
 
@@ -79,6 +102,50 @@ fn load_directory(dir: &Path, filter_keys: Option<&[String]>) -> Result<Config> 
 
         let config = load_file(&entry.path())?;
         merge_config(&mut merged, config);
+    }
+
+    Ok(merged)
+}
+
+/// Load configs, including optional/ when keys are specified
+fn load_directory_with_optional(dir: &Path, filter_keys: Option<&[String]>) -> Result<Config> {
+    let mut merged = Config::default();
+
+    // Load from main directory
+    for entry in get_config_entries(dir)? {
+        let key = file_key(&entry.path());
+        if key == "meta" {
+            continue;
+        }
+
+        if let Some(keys) = filter_keys {
+            if !keys.iter().any(|k| k == &key) {
+                continue;
+            }
+        }
+
+        let config = load_file(&entry.path())?;
+        merge_config(&mut merged, config);
+    }
+
+    // Also check optional/ when specific keys requested
+    if let Some(keys) = filter_keys {
+        let optional_dir = dir.join("optional");
+        if optional_dir.is_dir() {
+            for entry in get_config_entries(&optional_dir)? {
+                let key = file_key(&entry.path());
+                if key == "meta" {
+                    continue;
+                }
+
+                if !keys.iter().any(|k| k == &key) {
+                    continue;
+                }
+
+                let config = load_file(&entry.path())?;
+                merge_config(&mut merged, config);
+            }
+        }
     }
 
     Ok(merged)

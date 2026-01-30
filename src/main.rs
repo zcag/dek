@@ -487,7 +487,7 @@ fn run_test(config_path: Option<PathBuf>, image: String, keep: bool) -> Result<(
     args.push("sh".to_string());
     args.push("-c".to_string());
     args.push(format!(
-        r#"dek apply -C {}; echo ""; echo "Dropping into shell..."; exec sh -l"#,
+        r#"dek apply -C {}; echo ""; echo "Dropping into shell..."; exec bash -l"#,
         config_in_container
     ));
 
