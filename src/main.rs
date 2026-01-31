@@ -187,7 +187,9 @@ fn run_mode(mode: runner::Mode, config_path: Option<PathBuf>, configs: Vec<Strin
     };
 
     if let Some(banner) = meta.as_ref().and_then(|m| m.banner.as_ref()) {
-        println!("{}", banner.bold());
+        for line in banner.lines() {
+            println!("{}", line.bold());
+        }
     } else {
         let header = if configs.is_empty() {
             format!("{} {}", verb, path.display())
@@ -639,7 +641,9 @@ fn print_rich_help(meta: Option<&config::Meta>, config_path: &PathBuf) -> Result
     // Banner or header
     if let Some(banner) = meta.and_then(|m| m.banner.as_ref()) {
         println!();
-        println!("  {}", banner.bold());
+        for line in banner.lines() {
+            println!("  {}", line.bold());
+        }
     } else {
         println!();
         println!("  {}", name.bold());
