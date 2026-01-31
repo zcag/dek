@@ -198,13 +198,21 @@ impl Requirement {
             InstallMethod::Webi(pkg) => {
                 let url = format!("https://webi.sh/{}", pkg);
                 run_install_script(&url, &[])?;
-                // Webi installs to ~/.local/bin, ensure it's in PATH
+                // Webi installs to various paths, ensure they're in PATH
                 if let Ok(home) = std::env::var("HOME") {
-                    let local_bin = format!("{}/.local/bin", home);
+                    let webi_paths = [
+                        format!("{}/.local/bin", home),
+                        format!("{}/.local/opt/go/bin", home),
+                        format!("{}/go/bin", home),
+                    ];
                     if let Ok(path) = std::env::var("PATH") {
-                        if !path.contains(&local_bin) {
-                            std::env::set_var("PATH", format!("{}:{}", local_bin, path));
+                        let mut new_path = path.clone();
+                        for p in &webi_paths {
+                            if !new_path.contains(p) {
+                                new_path = format!("{}:{}", p, new_path);
+                            }
                         }
+                        std::env::set_var("PATH", new_path);
                     }
                 }
             }
