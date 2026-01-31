@@ -70,6 +70,46 @@ pub fn command_exists(cmd: &str) -> bool {
     which::which(cmd).is_ok()
 }
 
+/// User's shell type
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Shell {
+    Zsh,
+    Bash,
+    Fish,
+}
+
+impl Shell {
+    /// Detect the user's shell from $SHELL
+    pub fn detect() -> Self {
+        if let Ok(shell) = std::env::var("SHELL") {
+            if shell.contains("zsh") {
+                return Self::Zsh;
+            } else if shell.contains("fish") {
+                return Self::Fish;
+            }
+        }
+        Self::Bash
+    }
+
+    /// Shell name for display
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Zsh => "zsh",
+            Self::Bash => "bash",
+            Self::Fish => "fish",
+        }
+    }
+
+    /// Path to shell rc file
+    pub fn rc_file(&self) -> &'static str {
+        match self {
+            Self::Zsh => "~/.zshrc",
+            Self::Bash => "~/.bashrc",
+            Self::Fish => "~/.config/fish/config.fish",
+        }
+    }
+}
+
 /// Detected system package manager
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SysPkgManager {

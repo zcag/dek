@@ -123,7 +123,7 @@ impl Provider for EnvProvider {
 
 /// Ensure a source line exists in the user's shell rc file
 fn ensure_sourced_in_rc(line: &str) -> Result<()> {
-    let rc_path = expand_path(detect_shell_rc());
+    let rc_path = expand_path(crate::util::Shell::detect().rc_file());
 
     let content = if rc_path.exists() {
         fs::read_to_string(&rc_path)
@@ -147,15 +147,4 @@ fn ensure_sourced_in_rc(line: &str) -> Result<()> {
         .with_context(|| format!("failed to write: {}", rc_path.display()))?;
 
     Ok(())
-}
-
-fn detect_shell_rc() -> &'static str {
-    if let Ok(shell) = std::env::var("SHELL") {
-        if shell.contains("zsh") {
-            return "~/.zshrc";
-        } else if shell.contains("fish") {
-            return "~/.config/fish/config.fish";
-        }
-    }
-    "~/.bashrc"
 }

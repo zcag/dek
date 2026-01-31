@@ -451,45 +451,40 @@ fn run_setup() -> Result<()> {
     output::print_header("Setting up dek");
     println!();
 
-    let shell = detect_shell();
-    println!("  {} Detected shell: {}", "•".blue(), shell);
+    let shell = util::Shell::detect();
+    println!("  {} Detected shell: {}", "•".blue(), shell.name());
 
     // Generate completions
     let mut completions = Vec::new();
-    let clap_shell = match shell.as_str() {
-        "zsh" => Shell::Zsh,
-        "bash" => Shell::Bash,
-        "fish" => Shell::Fish,
-        _ => {
-            println!("  {} Unknown shell, skipping completions", "•".yellow());
-            return Ok(());
-        }
+    let clap_shell = match shell {
+        util::Shell::Zsh => Shell::Zsh,
+        util::Shell::Bash => Shell::Bash,
+        util::Shell::Fish => Shell::Fish,
     };
     generate(clap_shell, &mut Cli::command(), "dek", &mut completions);
     let completions_str = String::from_utf8(completions)?;
 
     // Determine completions path and install
     let home = std::env::var("HOME")?;
-    let (comp_path, source_line) = match shell.as_str() {
-        "zsh" => {
+    let (comp_path, source_line) = match shell {
+        util::Shell::Zsh => {
             let dir = format!("{}/.zsh/completions", home);
             fs::create_dir_all(&dir)?;
             (
                 format!("{}/_dek", dir),
-                Some(format!("fpath=(~/.zsh/completions $fpath) && autoload -Uz compinit && compinit")),
+                Some("fpath=(~/.zsh/completions $fpath) && autoload -Uz compinit && compinit"),
             )
         }
-        "bash" => {
+        util::Shell::Bash => {
             let dir = format!("{}/.local/share/bash-completion/completions", home);
             fs::create_dir_all(&dir)?;
             (format!("{}/dek", dir), None)
         }
-        "fish" => {
+        util::Shell::Fish => {
             let dir = format!("{}/.config/fish/completions", home);
             fs::create_dir_all(&dir)?;
             (format!("{}/dek.fish", dir), None)
         }
-        _ => return Ok(()),
     };
 
     fs::write(&comp_path, &completions_str)?;
@@ -505,7 +500,7 @@ fn run_setup() -> Result<()> {
             if !new_content.ends_with('\n') && !new_content.is_empty() {
                 new_content.push('\n');
             }
-            new_content.push_str(&line);
+            new_content.push_str(line);
             new_content.push('\n');
             fs::write(&rc_path, &new_content)?;
             println!("  {} Added completions to .zshrc", "✓".green());
@@ -515,22 +510,9 @@ fn run_setup() -> Result<()> {
     }
 
     println!();
-    println!("  {} Restart your shell or run: exec {}", "✓".green(), shell);
+    println!("  {} Restart your shell or run: exec {}", "✓".green(), shell.name());
 
     Ok(())
-}
-
-fn detect_shell() -> String {
-    if let Ok(shell) = std::env::var("SHELL") {
-        if shell.contains("zsh") {
-            return "zsh".to_string();
-        } else if shell.contains("fish") {
-            return "fish".to_string();
-        } else if shell.contains("bash") {
-            return "bash".to_string();
-        }
-    }
-    "bash".to_string()
 }
 
 fn print_rich_help(meta: Option<&config::Meta>, config_path: &PathBuf) -> Result<()> {
