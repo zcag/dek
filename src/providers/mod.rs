@@ -172,7 +172,7 @@ impl Requirement {
             InstallMethod::System(pkg) => {
                 let pm = SysPkgManager::detect()
                     .ok_or_else(|| anyhow::anyhow!("No supported package manager"))?;
-                pm.install(pkg)?;
+                pm.install(pm.package_name(pkg))?;
             }
             InstallMethod::Go(pkg) => {
                 let output = run_cmd("go", &["install", pkg])?;
