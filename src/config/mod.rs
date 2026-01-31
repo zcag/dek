@@ -252,5 +252,15 @@ pub fn load_meta<P: AsRef<Path>>(config_path: P) -> Option<Meta> {
     }
 
     let content = fs::read_to_string(&meta_path).ok()?;
-    toml::from_str(&content).ok()
+    let mut meta: Meta = toml::from_str(&content).ok()?;
+
+    // Load banner from banner.txt if present
+    let banner_path = dir.join("banner.txt");
+    if banner_path.exists() {
+        if let Ok(banner) = fs::read_to_string(&banner_path) {
+            meta.banner = Some(banner.trim_end().to_string());
+        }
+    }
+
+    Some(meta)
 }
