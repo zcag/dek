@@ -8,6 +8,11 @@ repository = "https://github.com/zcag/dek"
 keywords = ["cli", "automation", "environment", "workflow", "toml"]
 categories = ["command-line-utilities", "development-tools"]
 
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/dek-{ target }.tar.gz"
+bin-dir = "dek-{ target }/{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
 [dependencies]
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
