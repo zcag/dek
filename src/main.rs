@@ -630,6 +630,9 @@ fn print_rich_help(meta: Option<&config::Meta>, config_path: &PathBuf) -> Result
     if let Some(version) = meta.and_then(|m| m.version.as_ref()) {
         println!("  {}", format!("v{}", version).dimmed());
     }
+    if let Some(info) = bake::get_bake_info() {
+        println!("  {}", info.dimmed());
+    }
     println!();
 
     // Usage
