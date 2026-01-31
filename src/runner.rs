@@ -194,6 +194,11 @@ fn collect_state_items(config: &Config, base_dir: &Path) -> Vec<StateItem> {
                 items.push(StateItem::new("package.pip", item));
             }
         }
+        if let Some(ref webi) = pkg.webi {
+            for item in &webi.items {
+                items.push(StateItem::new("package.webi", item));
+            }
+        }
     }
 
     // Services

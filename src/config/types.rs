@@ -59,6 +59,7 @@ pub struct PackageConfig {
     pub go: Option<PackageList>,
     pub npm: Option<PackageList>,
     pub pip: Option<PackageList>,
+    pub webi: Option<PackageList>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

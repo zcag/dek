@@ -186,7 +186,7 @@ impl Provider for GoProvider {
     }
 
     fn requires(&self) -> Vec<Requirement> {
-        vec![Requirement::binary("go", InstallMethod::System("go"))]
+        vec![Requirement::binary("go", InstallMethod::Webi("golang"))]
     }
 
     fn check(&self, state: &StateItem) -> Result<CheckResult> {
@@ -212,6 +212,55 @@ impl Provider for GoProvider {
 fn go_bin_name(pkg: &str) -> String {
     let pkg = pkg.split('@').next().unwrap_or(pkg);
     pkg.rsplit('/').next().unwrap_or(pkg).to_string()
+}
+
+// =============================================================================
+// WEBI
+// =============================================================================
+
+pub struct WebiProvider;
+
+impl Provider for WebiProvider {
+    fn name(&self) -> &'static str {
+        "package.webi"
+    }
+
+    fn check(&self, state: &StateItem) -> Result<CheckResult> {
+        let (_, bin_name) = parse_webi_spec(&state.key);
+        if command_exists(&bin_name) {
+            Ok(CheckResult::Satisfied)
+        } else {
+            Ok(CheckResult::Missing {
+                detail: format!("'{}' not in PATH", bin_name),
+            })
+        }
+    }
+
+    fn apply(&self, state: &StateItem) -> Result<()> {
+        let (pkg_name, _) = parse_webi_spec(&state.key);
+        let url = format!("https://webi.sh/{}", pkg_name);
+        crate::util::run_install_script(&url, &[])?;
+
+        // Webi installs to ~/.local/bin, ensure it's in PATH
+        if let Ok(home) = std::env::var("HOME") {
+            let local_bin = format!("{}/.local/bin", home);
+            if let Ok(path) = std::env::var("PATH") {
+                if !path.contains(&local_bin) {
+                    std::env::set_var("PATH", format!("{}:{}", local_bin, path));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Parse webi spec: "pkg:bin" or "pkg" (bin defaults to pkg)
+fn parse_webi_spec(spec: &str) -> (String, String) {
+    if let Some((pkg, bin)) = spec.split_once(':') {
+        (pkg.to_string(), bin.to_string())
+    } else {
+        (spec.to_string(), spec.to_string())
+    }
 }
 
 // =============================================================================

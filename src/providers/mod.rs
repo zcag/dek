@@ -83,6 +83,8 @@ pub enum InstallMethod {
     Npm(&'static str),
     /// Install via pip install
     Pip(&'static str),
+    /// Install via webi (webinstall.dev)
+    Webi(&'static str),
 }
 
 /// A requirement that must be satisfied before a provider can run
@@ -193,6 +195,19 @@ impl Requirement {
                     bail!("pip install {} failed", pkg);
                 }
             }
+            InstallMethod::Webi(pkg) => {
+                let url = format!("https://webi.sh/{}", pkg);
+                run_install_script(&url, &[])?;
+                // Webi installs to ~/.local/bin, ensure it's in PATH
+                if let Ok(home) = std::env::var("HOME") {
+                    let local_bin = format!("{}/.local/bin", home);
+                    if let Ok(path) = std::env::var("PATH") {
+                        if !path.contains(&local_bin) {
+                            std::env::set_var("PATH", format!("{}:{}", local_bin, path));
+                        }
+                    }
+                }
+            }
         }
 
         if !self.is_satisfied() {
@@ -250,6 +265,7 @@ impl ProviderRegistry {
             Box::new(package::PacmanProvider),
             Box::new(package::CargoProvider),
             Box::new(package::GoProvider),
+            Box::new(package::WebiProvider),
             Box::new(package::NpmProvider),
             Box::new(package::PipProvider),
             Box::new(service::SystemdProvider),
