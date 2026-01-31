@@ -127,14 +127,23 @@ dek bake dek/ -o mysetup          # from directory
 ./mysetup info                     # show bake info
 ```
 
-## TODO
+## Package:Binary Syntax
 
-- Package name → binary name mapping: currently hardcoded (e.g. `ripgrep` → `rg`). Consider allowing config to specify binary name:
-  ```toml
-  [package.cargo]
-  items = [
-    "bat",
-    { pkg = "ripgrep", bin = "rg" },
-    { pkg = "fd-find", bin = "fd" },
-  ]
-  ```
+When package names differ from the binary they install, use `package:binary` syntax:
+
+```toml
+[package.cargo]
+items = ["bat", "ripgrep:rg", "fd-find:fd", "bottom:btm"]
+
+[package.webi]
+items = ["jq", "ripgrep:rg", "fzf"]
+
+[package.go]
+items = ["github.com/junegunn/fzf@latest"]  # auto-derives "fzf" from path
+```
+
+This tells dek to:
+1. Install the `package` part
+2. Check if the `binary` part exists in PATH
+
+Without `:binary`, dek assumes the binary name matches the package name (or derives it from go paths).

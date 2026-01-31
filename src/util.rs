@@ -2,6 +2,15 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+/// Parse package spec: "pkg:bin" or "pkg" (bin defaults to pkg)
+pub fn parse_spec(spec: &str) -> (String, String) {
+    if let Some((pkg, bin)) = spec.split_once(':') {
+        (pkg.to_string(), bin.to_string())
+    } else {
+        (spec.to_string(), spec.to_string())
+    }
+}
+
 /// Expand ~ to home directory
 pub fn expand_path<P: AsRef<Path>>(path: P) -> PathBuf {
     let path = path.as_ref();
@@ -108,29 +117,6 @@ impl SysPkgManager {
         Ok(())
     }
 
-    /// Get the package name for a tool (may differ across package managers)
-    #[allow(dead_code)]
-    pub fn package_name<'a>(&self, tool: &'a str) -> &'a str {
-        match (self, tool) {
-            // Go
-            (Self::Pacman, "go") => "go",
-            (Self::Apt, "go") => "golang",
-            (Self::Dnf | Self::Yum, "go") => "golang",
-            (Self::Brew, "go") => "go",
-            // Node/npm
-            (Self::Pacman, "npm") => "npm",
-            (Self::Apt, "npm") => "npm",
-            (Self::Dnf | Self::Yum, "npm") => "npm",
-            (Self::Brew, "npm") => "node",
-            // Python/pip
-            (Self::Pacman, "pip") => "python-pip",
-            (Self::Apt, "pip") => "python3-pip",
-            (Self::Dnf | Self::Yum, "pip") => "python3-pip",
-            (Self::Brew, "pip") => "python",
-            // Default: use the tool name
-            _ => tool,
-        }
-    }
 }
 
 /// Run a script from a URL via curl | sh

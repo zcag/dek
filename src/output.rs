@@ -1,5 +1,17 @@
 use crate::providers::{CheckResult, StateItem};
 use owo_colors::OwoColorize;
+use std::time::Duration;
+
+fn format_duration(d: Duration) -> String {
+    let secs = d.as_secs();
+    if secs >= 60 {
+        format!("{}m{}s", secs / 60, secs % 60)
+    } else if secs > 0 {
+        format!("{}s", secs)
+    } else {
+        format!("{}ms", d.as_millis())
+    }
+}
 
 pub fn print_header(text: &str) {
     println!("{}", text.bold());
@@ -74,49 +86,56 @@ pub fn print_apply_fail(item: &StateItem, err: &str) {
     );
 }
 
-pub fn print_summary(total: usize, changed: usize, failed: usize) {
+pub fn print_summary(total: usize, changed: usize, failed: usize, elapsed: Duration) {
     println!();
+    let timing = format!("({})", format_duration(elapsed));
     if failed > 0 {
         println!(
-            "{} {} total, {} changed, {} failed",
+            "{} {} total, {} changed, {} failed {}",
             "✗".red(),
             total,
             changed.to_string().green(),
-            failed.to_string().red()
+            failed.to_string().red(),
+            timing.dimmed()
         );
     } else if changed > 0 {
         println!(
-            "{} {} total, {} changed",
+            "{} {} total, {} changed {}",
             "✓".green(),
             total,
-            changed.to_string().green()
+            changed.to_string().green(),
+            timing.dimmed()
         );
     } else {
         println!(
-            "{} {} total, {} up to date",
+            "{} {} total, {} up to date {}",
             "✓".green(),
             total,
-            "all".green()
+            "all".green(),
+            timing.dimmed()
         );
     }
 }
 
-pub fn print_check_summary(total: usize, satisfied: usize, missing: usize) {
+pub fn print_check_summary(total: usize, satisfied: usize, missing: usize, elapsed: Duration) {
     println!();
+    let timing = format!("({})", format_duration(elapsed));
     if missing > 0 {
         println!(
-            "{} {} total, {} ok, {} missing",
+            "{} {} total, {} ok, {} missing {}",
             "→".yellow(),
             total,
             satisfied.to_string().green(),
-            missing.to_string().yellow()
+            missing.to_string().yellow(),
+            timing.dimmed()
         );
     } else {
         println!(
-            "{} {} total, {} up to date",
+            "{} {} total, {} up to date {}",
             "✓".green(),
             total,
-            "all".green()
+            "all".green(),
+            timing.dimmed()
         );
     }
 }

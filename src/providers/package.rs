@@ -17,21 +17,27 @@ impl Provider for OsProvider {
         let pm = SysPkgManager::detect()
             .ok_or_else(|| anyhow::anyhow!("No supported package manager found"))?;
 
+        // Delegate to webi on RHEL/CentOS
+        if matches!(pm, SysPkgManager::Dnf | SysPkgManager::Yum) {
+            return WebiProvider.check(state);
+        }
+
+        let (pkg_name, _) = crate::util::parse_spec(&state.key);
         let installed = match pm {
-            SysPkgManager::Pacman => run_cmd_ok("pacman", &["-Q", &state.key]),
+            SysPkgManager::Pacman => run_cmd_ok("pacman", &["-Q", &pkg_name]),
             SysPkgManager::Apt => {
-                let output = run_cmd("dpkg-query", &["-W", "-f=${Status}", &state.key])?;
+                let output = run_cmd("dpkg-query", &["-W", "-f=${Status}", &pkg_name])?;
                 String::from_utf8_lossy(&output.stdout).contains("install ok installed")
             }
-            SysPkgManager::Dnf | SysPkgManager::Yum => run_cmd_ok("rpm", &["-q", &state.key]),
-            SysPkgManager::Brew => run_cmd_ok("brew", &["list", &state.key]),
+            SysPkgManager::Dnf | SysPkgManager::Yum => unreachable!(),
+            SysPkgManager::Brew => run_cmd_ok("brew", &["list", &pkg_name]),
         };
 
         if installed {
             Ok(CheckResult::Satisfied)
         } else {
             Ok(CheckResult::Missing {
-                detail: format!("package '{}' not installed", state.key),
+                detail: format!("package '{}' not installed", pkg_name),
             })
         }
     }
@@ -39,7 +45,14 @@ impl Provider for OsProvider {
     fn apply(&self, state: &StateItem) -> Result<()> {
         let pm = SysPkgManager::detect()
             .ok_or_else(|| anyhow::anyhow!("No supported package manager found"))?;
-        pm.install(&state.key)
+
+        // Delegate to webi on RHEL/CentOS
+        if matches!(pm, SysPkgManager::Dnf | SysPkgManager::Yum) {
+            return WebiProvider.apply(state);
+        }
+
+        let (pkg_name, _) = crate::util::parse_spec(&state.key);
+        pm.install(&pkg_name)
     }
 }
 
@@ -55,20 +68,22 @@ impl Provider for AptProvider {
     }
 
     fn check(&self, state: &StateItem) -> Result<CheckResult> {
-        let output = run_cmd("dpkg-query", &["-W", "-f=${Status}", &state.key])?;
+        let (pkg_name, _) = crate::util::parse_spec(&state.key);
+        let output = run_cmd("dpkg-query", &["-W", "-f=${Status}", &pkg_name])?;
         let status = String::from_utf8_lossy(&output.stdout);
 
         if status.contains("install ok installed") {
             Ok(CheckResult::Satisfied)
         } else {
             Ok(CheckResult::Missing {
-                detail: format!("package '{}' not installed", state.key),
+                detail: format!("package '{}' not installed", pkg_name),
             })
         }
     }
 
     fn apply(&self, state: &StateItem) -> Result<()> {
-        let output = run_sudo("apt-get", &["install", "-y", &state.key])?;
+        let (pkg_name, _) = crate::util::parse_spec(&state.key);
+        let output = run_sudo("apt-get", &["install", "-y", &pkg_name])?;
         if !output.status.success() {
             bail!("apt-get install failed: {}", String::from_utf8_lossy(&output.stderr));
         }
@@ -88,18 +103,20 @@ impl Provider for PacmanProvider {
     }
 
     fn check(&self, state: &StateItem) -> Result<CheckResult> {
-        let ok = run_cmd_ok("pacman", &["-Q", &state.key]);
+        let (pkg_name, _) = crate::util::parse_spec(&state.key);
+        let ok = run_cmd_ok("pacman", &["-Q", &pkg_name]);
         if ok {
             Ok(CheckResult::Satisfied)
         } else {
             Ok(CheckResult::Missing {
-                detail: format!("package '{}' not installed", state.key),
+                detail: format!("package '{}' not installed", pkg_name),
             })
         }
     }
 
     fn apply(&self, state: &StateItem) -> Result<()> {
-        let output = run_sudo("pacman", &["-S", "--noconfirm", &state.key])?;
+        let (pkg_name, _) = crate::util::parse_spec(&state.key);
+        let output = run_sudo("pacman", &["-S", "--noconfirm", &pkg_name])?;
         if !output.status.success() {
             bail!("pacman install failed: {}", String::from_utf8_lossy(&output.stderr));
         }
@@ -126,7 +143,7 @@ impl Provider for CargoProvider {
     }
 
     fn check(&self, state: &StateItem) -> Result<CheckResult> {
-        let (_, bin_name) = parse_cargo_spec(&state.key);
+        let (_, bin_name) = crate::util::parse_spec(&state.key);
         if command_exists(&bin_name) {
             Ok(CheckResult::Satisfied)
         } else {
@@ -137,7 +154,7 @@ impl Provider for CargoProvider {
     }
 
     fn apply(&self, state: &StateItem) -> Result<()> {
-        let (pkg_name, _) = parse_cargo_spec(&state.key);
+        let (pkg_name, _) = crate::util::parse_spec(&state.key);
 
         // Try binstall first (pre-compiled), fall back to install (compile)
         let output = run_cmd("cargo", &["binstall", "-y", &pkg_name])?;
@@ -151,27 +168,6 @@ impl Provider for CargoProvider {
         }
         Ok(())
     }
-}
-
-/// Parse cargo spec: "pkg:bin" or "pkg" (bin defaults to pkg or known mapping)
-fn parse_cargo_spec(spec: &str) -> (String, String) {
-    if let Some((pkg, bin)) = spec.split_once(':') {
-        (pkg.to_string(), bin.to_string())
-    } else {
-        let bin = cargo_bin_name(spec);
-        (spec.to_string(), bin)
-    }
-}
-
-fn cargo_bin_name(pkg: &str) -> String {
-    match pkg {
-        "ripgrep" => "rg",
-        "fd-find" => "fd",
-        "du-dust" => "dust",
-        "bottom" => "btm",
-        _ => pkg,
-    }
-    .to_string()
 }
 
 // =============================================================================
@@ -201,7 +197,8 @@ impl Provider for GoProvider {
     }
 
     fn apply(&self, state: &StateItem) -> Result<()> {
-        let output = run_cmd("go", &["install", &state.key])?;
+        let (pkg_name, _) = go_parse_spec(&state.key);
+        let output = run_cmd("go", &["install", &pkg_name])?;
         if !output.status.success() {
             bail!("go install failed: {}", String::from_utf8_lossy(&output.stderr));
         }
@@ -209,7 +206,26 @@ impl Provider for GoProvider {
     }
 }
 
-fn go_bin_name(pkg: &str) -> String {
+/// Parse go spec: supports explicit "pkg:bin" or derives binary from path
+fn go_parse_spec(spec: &str) -> (String, String) {
+    if let Some((pkg, bin)) = spec.split_once(':') {
+        (pkg.to_string(), bin.to_string())
+    } else {
+        let bin = go_bin_from_path(spec);
+        (spec.to_string(), bin)
+    }
+}
+
+/// Get binary name from go package path (last segment, stripping @version)
+fn go_bin_name(spec: &str) -> String {
+    // Check for explicit :bin first
+    if let Some((_, bin)) = spec.split_once(':') {
+        return bin.to_string();
+    }
+    go_bin_from_path(spec)
+}
+
+fn go_bin_from_path(pkg: &str) -> String {
     let pkg = pkg.split('@').next().unwrap_or(pkg);
     pkg.rsplit('/').next().unwrap_or(pkg).to_string()
 }
@@ -226,7 +242,7 @@ impl Provider for WebiProvider {
     }
 
     fn check(&self, state: &StateItem) -> Result<CheckResult> {
-        let (_, bin_name) = parse_webi_spec(&state.key);
+        let (_, bin_name) = crate::util::parse_spec(&state.key);
         if command_exists(&bin_name) {
             Ok(CheckResult::Satisfied)
         } else {
@@ -237,7 +253,7 @@ impl Provider for WebiProvider {
     }
 
     fn apply(&self, state: &StateItem) -> Result<()> {
-        let (pkg_name, _) = parse_webi_spec(&state.key);
+        let (pkg_name, _) = crate::util::parse_spec(&state.key);
         let url = format!("https://webi.sh/{}", pkg_name);
         crate::util::run_install_script(&url, &[])?;
 
@@ -262,15 +278,6 @@ impl Provider for WebiProvider {
     }
 }
 
-/// Parse webi spec: "pkg:bin" or "pkg" (bin defaults to pkg)
-fn parse_webi_spec(spec: &str) -> (String, String) {
-    if let Some((pkg, bin)) = spec.split_once(':') {
-        (pkg.to_string(), bin.to_string())
-    } else {
-        (spec.to_string(), spec.to_string())
-    }
-}
-
 // =============================================================================
 // NPM
 // =============================================================================
@@ -283,22 +290,24 @@ impl Provider for NpmProvider {
     }
 
     fn requires(&self) -> Vec<Requirement> {
-        vec![Requirement::binary("npm", InstallMethod::System("npm"))]
+        vec![Requirement::binary("npm", InstallMethod::Webi("node"))]
     }
 
     fn check(&self, state: &StateItem) -> Result<CheckResult> {
-        let ok = run_cmd_ok("npm", &["list", "-g", &state.key, "--depth=0"]);
+        let (pkg_name, _) = crate::util::parse_spec(&state.key);
+        let ok = run_cmd_ok("npm", &["list", "-g", &pkg_name, "--depth=0"]);
         if ok {
             Ok(CheckResult::Satisfied)
         } else {
             Ok(CheckResult::Missing {
-                detail: format!("npm package '{}' not installed globally", state.key),
+                detail: format!("npm package '{}' not installed globally", pkg_name),
             })
         }
     }
 
     fn apply(&self, state: &StateItem) -> Result<()> {
-        let output = run_cmd("npm", &["install", "-g", &state.key])?;
+        let (pkg_name, _) = crate::util::parse_spec(&state.key);
+        let output = run_cmd("npm", &["install", "-g", &pkg_name])?;
         if !output.status.success() {
             bail!("npm install failed: {}", String::from_utf8_lossy(&output.stderr));
         }
@@ -318,24 +327,26 @@ impl Provider for PipProvider {
     }
 
     fn requires(&self) -> Vec<Requirement> {
-        vec![Requirement::binary("pip3", InstallMethod::System("python3-pip"))]
+        vec![Requirement::binary("pip3", InstallMethod::Webi("python"))]
     }
 
     fn check(&self, state: &StateItem) -> Result<CheckResult> {
-        let ok = run_cmd_ok("pip3", &["show", &state.key])
-            || run_cmd_ok("pip", &["show", &state.key]);
+        let (pkg_name, _) = crate::util::parse_spec(&state.key);
+        let ok = run_cmd_ok("pip3", &["show", &pkg_name])
+            || run_cmd_ok("pip", &["show", &pkg_name]);
         if ok {
             Ok(CheckResult::Satisfied)
         } else {
             Ok(CheckResult::Missing {
-                detail: format!("pip package '{}' not installed", state.key),
+                detail: format!("pip package '{}' not installed", pkg_name),
             })
         }
     }
 
     fn apply(&self, state: &StateItem) -> Result<()> {
+        let (pkg_name, _) = crate::util::parse_spec(&state.key);
         let pip = if command_exists("pip3") { "pip3" } else { "pip" };
-        let output = run_cmd(pip, &["install", "--user", &state.key])?;
+        let output = run_cmd(pip, &["install", "--user", &pkg_name])?;
         if !output.status.success() {
             bail!("pip install failed: {}", String::from_utf8_lossy(&output.stderr));
         }

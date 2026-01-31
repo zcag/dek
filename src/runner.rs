@@ -4,6 +4,7 @@ use crate::providers::{resolve_requirements, ProviderRegistry, Requirement, Stat
 use anyhow::{bail, Result};
 use std::collections::HashSet;
 use std::path::Path;
+use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Mode {
@@ -57,6 +58,7 @@ impl Runner {
     }
 
     fn check_all(&self, items: &[StateItem]) -> Result<()> {
+        let start = Instant::now();
         let mut satisfied = 0;
         let mut missing = 0;
 
@@ -76,11 +78,13 @@ impl Runner {
             }
         }
 
-        output::print_check_summary(items.len(), satisfied, missing);
+        output::print_check_summary(items.len(), satisfied, missing, start.elapsed());
         Ok(())
     }
 
     fn apply_all(&self, items: &[StateItem]) -> Result<()> {
+        let start = Instant::now();
+
         // Collect and resolve requirements from all providers
         let requirements = self.collect_requirements(items)?;
         if !requirements.is_empty() {
@@ -118,7 +122,7 @@ impl Runner {
             }
         }
 
-        output::print_summary(items.len(), changed, failed);
+        output::print_summary(items.len(), changed, failed, start.elapsed());
 
         if failed > 0 {
             bail!("{} items failed to apply", failed);

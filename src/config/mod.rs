@@ -206,7 +206,6 @@ fn merge_config(base: &mut Config, other: Config) {
         merge_package_list(&mut base_pkg.os, pkg.os);
         merge_package_list(&mut base_pkg.apt, pkg.apt);
         merge_package_list(&mut base_pkg.pacman, pkg.pacman);
-        merge_package_list(&mut base_pkg.yum, pkg.yum);
         merge_package_list(&mut base_pkg.cargo, pkg.cargo);
         merge_package_list(&mut base_pkg.go, pkg.go);
         merge_package_list(&mut base_pkg.npm, pkg.npm);

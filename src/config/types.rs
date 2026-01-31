@@ -54,7 +54,6 @@ pub struct PackageConfig {
     pub os: Option<PackageList>,
     pub apt: Option<PackageList>,
     pub pacman: Option<PackageList>,
-    pub yum: Option<PackageList>,
     pub cargo: Option<PackageList>,
     pub go: Option<PackageList>,
     pub npm: Option<PackageList>,

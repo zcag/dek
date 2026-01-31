@@ -120,9 +120,9 @@ fn main() -> Result<()> {
     }
 
     match cli.command {
-        Some(Commands::Apply { config, configs }) => run_apply(config, configs),
-        Some(Commands::Check { config, configs }) => run_check(config, configs),
-        Some(Commands::Plan { config, configs }) => run_plan(config, configs),
+        Some(Commands::Apply { config, configs }) => run_mode(runner::Mode::Apply, config, configs),
+        Some(Commands::Check { config, configs }) => run_mode(runner::Mode::Check, config, configs),
+        Some(Commands::Plan { config, configs }) => run_mode(runner::Mode::Plan, config, configs),
         Some(Commands::List { config }) => run_list(config),
         Some(Commands::Run { name, args, config }) => run_command(config, name, args),
         Some(Commands::Test { config, image, keep }) => run_test(config, image, keep),
@@ -160,19 +160,24 @@ fn resolve_config(config: Option<PathBuf>) -> Result<PathBuf> {
     }
 }
 
-fn run_apply(config_path: Option<PathBuf>, configs: Vec<String>) -> Result<()> {
+fn run_mode(mode: runner::Mode, config_path: Option<PathBuf>, configs: Vec<String>) -> Result<()> {
     let path = resolve_config(config_path)?;
     let resolved_path = config::resolve_path(&path)?;
     let meta = config::load_meta(&resolved_path);
 
-    // Show banner or default header
+    let verb = match mode {
+        runner::Mode::Apply => "Applying",
+        runner::Mode::Check => "Checking",
+        runner::Mode::Plan => "Plan for",
+    };
+
     if let Some(banner) = meta.as_ref().and_then(|m| m.banner.as_ref()) {
         println!("{}", banner.bold());
     } else {
         let header = if configs.is_empty() {
-            format!("Applying {}", path.display())
+            format!("{} {}", verb, path.display())
         } else {
-            format!("Applying [{}]", configs.join(", "))
+            format!("{} [{}]", verb, configs.join(", "))
         };
         output::print_header(&header);
     }
@@ -187,67 +192,7 @@ fn run_apply(config_path: Option<PathBuf>, configs: Vec<String>) -> Result<()> {
         config::load_selected(&resolved_path, &configs)?
     };
 
-    let runner = runner::Runner::new(runner::Mode::Apply);
-    runner.run(&config, &resolved_path)
-}
-
-fn run_check(config_path: Option<PathBuf>, configs: Vec<String>) -> Result<()> {
-    let path = resolve_config(config_path)?;
-    let resolved_path = config::resolve_path(&path)?;
-    let meta = config::load_meta(&resolved_path);
-
-    if let Some(banner) = meta.as_ref().and_then(|m| m.banner.as_ref()) {
-        println!("{}", banner.bold());
-    } else {
-        let header = if configs.is_empty() {
-            format!("Checking {}", path.display())
-        } else {
-            format!("Checking [{}]", configs.join(", "))
-        };
-        output::print_header(&header);
-    }
-    if let Some(info) = bake::get_bake_info() {
-        println!("{}", info.dimmed());
-    }
-    println!();
-
-    let config = if configs.is_empty() {
-        config::load(&resolved_path)?
-    } else {
-        config::load_selected(&resolved_path, &configs)?
-    };
-
-    let runner = runner::Runner::new(runner::Mode::Check);
-    runner.run(&config, &resolved_path)
-}
-
-fn run_plan(config_path: Option<PathBuf>, configs: Vec<String>) -> Result<()> {
-    let path = resolve_config(config_path)?;
-    let resolved_path = config::resolve_path(&path)?;
-    let meta = config::load_meta(&resolved_path);
-
-    if let Some(banner) = meta.as_ref().and_then(|m| m.banner.as_ref()) {
-        println!("{}", banner.bold());
-    } else {
-        let header = if configs.is_empty() {
-            format!("Plan for {}", path.display())
-        } else {
-            format!("Plan for [{}]", configs.join(", "))
-        };
-        output::print_header(&header);
-    }
-    if let Some(info) = bake::get_bake_info() {
-        println!("{}", info.dimmed());
-    }
-    println!();
-
-    let config = if configs.is_empty() {
-        config::load(&resolved_path)?
-    } else {
-        config::load_selected(&resolved_path, &configs)?
-    };
-
-    let runner = runner::Runner::new(runner::Mode::Plan);
+    let runner = runner::Runner::new(mode);
     runner.run(&config, &resolved_path)
 }
 
@@ -278,7 +223,6 @@ fn run_list(config_path: Option<PathBuf>) -> Result<()> {
 }
 
 fn run_command(config_path: Option<PathBuf>, name: Option<String>, args: Vec<String>) -> Result<()> {
-    use crate::providers::StateItem;
     use std::process::Command;
 
     let path = resolve_config(config_path)?;
@@ -325,28 +269,9 @@ fn run_command(config_path: Option<PathBuf>, name: Option<String>, args: Vec<Str
         output::print_header(&format!("Resolving deps for {}", name));
         println!();
 
-        let mut items = Vec::new();
-        for dep in &run_config.deps {
-            let (provider, package) = dep
-                .split_once('.')
-                .ok_or_else(|| anyhow::anyhow!("Invalid dep spec '{}'. Use provider.package", dep))?;
-
-            let kind = match provider {
-                "os" => "package.os",
-                "apt" => "package.apt",
-                "pacman" => "package.pacman",
-                "cargo" => "package.cargo",
-                "go" => "package.go",
-                "npm" => "package.npm",
-                "pip" => "package.pip",
-                _ => bail!("Unknown provider '{}' in dep '{}'", provider, dep),
-            };
-
-            items.push(StateItem::new(kind, package));
-        }
-
+        let items: Result<Vec<_>> = run_config.deps.iter().map(|d| parse_provider_spec(d)).collect();
         let runner = runner::Runner::new(runner::Mode::Apply);
-        runner.run_items(&items)?;
+        runner.run_items(&items?)?;
         println!();
     }
 
@@ -380,35 +305,34 @@ fn run_command(config_path: Option<PathBuf>, name: Option<String>, args: Vec<Str
     Ok(())
 }
 
-fn run_inline(specs: &[String]) -> Result<()> {
-    use crate::providers::StateItem;
+/// Parse "provider.package" spec into StateItem
+fn parse_provider_spec(spec: &str) -> Result<providers::StateItem> {
+    let (provider, package) = spec
+        .split_once('.')
+        .ok_or_else(|| anyhow::anyhow!("Invalid spec '{}'. Use provider.package (e.g., cargo.bat)", spec))?;
 
+    let kind = match provider {
+        "os" => "package.os",
+        "apt" => "package.apt",
+        "pacman" => "package.pacman",
+        "cargo" => "package.cargo",
+        "go" => "package.go",
+        "npm" => "package.npm",
+        "pip" => "package.pip",
+        "webi" => "package.webi",
+        _ => bail!("Unknown provider '{}'. Use: os, apt, pacman, cargo, go, npm, pip, webi", provider),
+    };
+
+    Ok(providers::StateItem::new(kind, package))
+}
+
+fn run_inline(specs: &[String]) -> Result<()> {
     output::print_header("Installing");
     println!();
 
-    let mut items = Vec::new();
-
-    for spec in specs {
-        let (provider, package) = spec
-            .split_once('.')
-            .ok_or_else(|| anyhow::anyhow!("Invalid spec '{}'. Use provider.package (e.g., cargo.bat)", spec))?;
-
-        let kind = match provider {
-            "os" => "package.os",
-            "apt" => "package.apt",
-            "pacman" => "package.pacman",
-            "cargo" => "package.cargo",
-            "go" => "package.go",
-            "npm" => "package.npm",
-            "pip" => "package.pip",
-            _ => bail!("Unknown provider '{}'. Use: os, apt, pacman, cargo, go, npm, pip", provider),
-        };
-
-        items.push(StateItem::new(kind, package));
-    }
-
+    let items: Result<Vec<_>> = specs.iter().map(|s| parse_provider_spec(s)).collect();
     let runner = runner::Runner::new(runner::Mode::Apply);
-    runner.run_items(&items)
+    runner.run_items(&items?)
 }
 
 fn run_test(config_path: Option<PathBuf>, image: String, keep: bool) -> Result<()> {
