@@ -223,3 +223,24 @@ pub fn extract_tar_gz(path: &Path) -> Result<PathBuf> {
 
     Ok(cache_dir)
 }
+
+/// Create tar.gz from a path (file or directory)
+pub fn create_tar_gz(path: &Path) -> Result<Vec<u8>> {
+    let mut tar_data = Vec::new();
+    {
+        let encoder = flate2::write::GzEncoder::new(&mut tar_data, flate2::Compression::default());
+        let mut tar = tar::Builder::new(encoder);
+
+        if path.is_file() {
+            let name = path.file_name().unwrap_or_default();
+            tar.append_path_with_name(path, name)?;
+        } else if path.is_dir() {
+            tar.append_dir_all(".", path)?;
+        } else {
+            anyhow::bail!("Path does not exist: {}", path.display());
+        }
+
+        tar.into_inner()?.finish()?;
+    }
+    Ok(tar_data)
+}

@@ -21,6 +21,14 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
+    /// Config directory path (default: dek.toml or dek/)
+    #[arg(short = 'C', long, global = true, value_name = "PATH")]
+    config: Option<PathBuf>,
+
+    /// Remote target (user@host)
+    #[arg(short, long, global = true, value_name = "TARGET")]
+    target: Option<String>,
+
     /// Inline install: provider.package (e.g., cargo.bat apt.htop)
     #[arg(value_name = "SPEC", trailing_var_arg = true)]
     inline: Vec<String>,
@@ -33,37 +41,21 @@ enum Commands {
         /// Configs to apply (e.g., "tools", "config"). Applies all if omitted.
         #[arg(value_name = "CONFIGS")]
         configs: Vec<String>,
-
-        /// Config directory path (default: dek.toml or dek/)
-        #[arg(short = 'C', long, value_name = "PATH")]
-        config: Option<PathBuf>,
     },
     /// Check what would change (dry-run)
     Check {
         /// Configs to check
         #[arg(value_name = "CONFIGS")]
         configs: Vec<String>,
-
-        /// Config directory path
-        #[arg(short = 'C', long, value_name = "PATH")]
-        config: Option<PathBuf>,
     },
     /// List items from config (no state check)
     Plan {
         /// Configs to plan
         #[arg(value_name = "CONFIGS")]
         configs: Vec<String>,
-
-        /// Config directory path
-        #[arg(short = 'C', long, value_name = "PATH")]
-        config: Option<PathBuf>,
     },
     /// List available configs
-    List {
-        /// Config directory path
-        #[arg(value_name = "CONFIG")]
-        config: Option<PathBuf>,
-    },
+    List,
     /// Run a command from config (no name = list commands)
     Run {
         /// Command name (omit to list available commands)
@@ -72,17 +64,9 @@ enum Commands {
         /// Arguments to pass to the command
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
-
-        /// Config directory path
-        #[arg(short = 'C', long, value_name = "PATH")]
-        config: Option<PathBuf>,
     },
     /// Spin up container, apply config, drop into shell
     Test {
-        /// Config file or directory
-        #[arg(value_name = "CONFIG")]
-        config: Option<PathBuf>,
-
         /// Base image (default: archlinux)
         #[arg(short, long, default_value = "archlinux")]
         image: String,
@@ -93,10 +77,6 @@ enum Commands {
     },
     /// Bake config into standalone binary
     Bake {
-        /// Config file or directory to embed
-        #[arg(value_name = "CONFIG")]
-        config: Option<PathBuf>,
-
         /// Output binary path
         #[arg(short, long, default_value = "dek-baked")]
         output: PathBuf,
@@ -119,14 +99,41 @@ fn main() -> Result<()> {
         return run_inline(&cli.inline);
     }
 
+    let config = cli.config;
+    let target = cli.target;
+
     match cli.command {
-        Some(Commands::Apply { config, configs }) => run_mode(runner::Mode::Apply, config, configs),
-        Some(Commands::Check { config, configs }) => run_mode(runner::Mode::Check, config, configs),
-        Some(Commands::Plan { config, configs }) => run_mode(runner::Mode::Plan, config, configs),
-        Some(Commands::List { config }) => run_list(config),
-        Some(Commands::Run { name, args, config }) => run_command(config, name, args),
-        Some(Commands::Test { config, image, keep }) => run_test(config, image, keep),
-        Some(Commands::Bake { config, output }) => bake::run(config, output),
+        Some(Commands::Apply { configs }) => {
+            if let Some(t) = target {
+                run_remote(&t, "apply", config, &configs)
+            } else {
+                run_mode(runner::Mode::Apply, config, configs)
+            }
+        }
+        Some(Commands::Check { configs }) => {
+            if let Some(t) = target {
+                run_remote(&t, "check", config, &configs)
+            } else {
+                run_mode(runner::Mode::Check, config, configs)
+            }
+        }
+        Some(Commands::Plan { configs }) => {
+            if let Some(t) = target {
+                run_remote(&t, "plan", config, &configs)
+            } else {
+                run_mode(runner::Mode::Plan, config, configs)
+            }
+        }
+        Some(Commands::List) => {
+            if let Some(t) = target {
+                run_remote(&t, "list", config, &[])
+            } else {
+                run_list(config)
+            }
+        }
+        Some(Commands::Run { name, args }) => run_command(config, name, args),
+        Some(Commands::Test { image, keep }) => run_test(config, image, keep),
+        Some(Commands::Bake { output }) => bake::run(config, output),
         Some(Commands::Completions { shell }) => {
             generate(shell, &mut Cli::command(), "dek", &mut io::stdout());
             Ok(())
@@ -134,7 +141,9 @@ fn main() -> Result<()> {
         Some(Commands::Setup) => run_setup(),
         None => {
             // No command - show rich help
-            let config_path = bake::check_embedded().or_else(config::find_default_config);
+            let config_path = config
+                .or_else(bake::check_embedded)
+                .or_else(config::find_default_config);
             if let Some(path) = config_path {
                 let meta = config::load_meta(&path);
                 return print_rich_help(meta.as_ref(), &path);
@@ -194,6 +203,82 @@ fn run_mode(mode: runner::Mode, config_path: Option<PathBuf>, configs: Vec<Strin
 
     let runner = runner::Runner::new(mode);
     runner.run(&config, &resolved_path)
+}
+
+fn run_remote(target: &str, cmd: &str, config_path: Option<PathBuf>, configs: &[String]) -> Result<()> {
+    use owo_colors::OwoColorize;
+    use std::fs;
+
+    let config_path = resolve_config(config_path)?;
+    let config_abs = fs::canonicalize(&config_path)?;
+
+    output::print_header(&format!("{} on {}", cmd, target));
+    println!();
+
+    // Create tar.gz of config
+    println!("  {} Creating config archive...", "→".yellow());
+    let tar_data = util::create_tar_gz(&config_abs)?;
+    let hash = format!("{:x}", md5::compute(&tar_data));
+    let local_tar = format!("/tmp/dek-config-{}.tar.gz", &hash[..8]);
+    fs::write(&local_tar, &tar_data)?;
+
+    // Get dek binary path
+    let dek_binary = std::env::current_exe()?;
+    let remote_dir = "/tmp/dek-remote";
+    let remote_bin = format!("{}/dek", remote_dir);
+    let remote_config = format!("{}/config.tar.gz", remote_dir);
+
+    // Create remote directory
+    println!("  {} Setting up remote...", "→".yellow());
+    let mkdir_status = Command::new("ssh")
+        .args([target, &format!("mkdir -p {}", remote_dir)])
+        .status()?;
+    if !mkdir_status.success() {
+        bail!("Failed to create remote directory");
+    }
+
+    // Copy dek binary
+    println!("  {} Copying dek binary...", "→".yellow());
+    let scp_bin = Command::new("scp")
+        .args(["-q", &dek_binary.to_string_lossy(), &format!("{}:{}", target, remote_bin)])
+        .status()?;
+    if !scp_bin.success() {
+        bail!("Failed to copy dek binary to remote");
+    }
+
+    // Copy config
+    println!("  {} Copying config...", "→".yellow());
+    let scp_config = Command::new("scp")
+        .args(["-q", &local_tar, &format!("{}:{}", target, remote_config)])
+        .status()?;
+    if !scp_config.success() {
+        bail!("Failed to copy config to remote");
+    }
+
+    // Build remote command
+    let config_arg = format!("-C {}", remote_config);
+    let configs_arg = configs.join(" ");
+    let remote_cmd = format!("{} {} {} {}", remote_bin, cmd, config_arg, configs_arg);
+
+    println!("  {} Running on {}...", "→".yellow(), target);
+    println!();
+
+    // Run dek on remote
+    let status = Command::new("ssh")
+        .args(["-t", target, &remote_cmd])
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()?;
+
+    // Cleanup local tar
+    let _ = fs::remove_file(&local_tar);
+
+    if !status.success() {
+        bail!("Remote command failed");
+    }
+
+    Ok(())
 }
 
 fn run_list(config_path: Option<PathBuf>) -> Result<()> {
