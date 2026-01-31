@@ -115,8 +115,6 @@ impl Shell {
 pub enum SysPkgManager {
     Apt,
     Pacman,
-    Dnf,
-    Yum,
     Brew,
 }
 
@@ -127,10 +125,6 @@ impl SysPkgManager {
             Some(Self::Pacman)
         } else if command_exists("apt-get") {
             Some(Self::Apt)
-        } else if command_exists("dnf") {
-            Some(Self::Dnf)
-        } else if command_exists("yum") {
-            Some(Self::Yum)
         } else if command_exists("brew") {
             Some(Self::Brew)
         } else {
@@ -143,8 +137,6 @@ impl SysPkgManager {
         let output = match self {
             Self::Pacman => run_sudo("pacman", &["-Sy", "--noconfirm", pkg])?,
             Self::Apt => run_sudo("apt-get", &["install", "-y", pkg])?,
-            Self::Dnf => run_sudo("dnf", &["install", "-y", pkg])?,
-            Self::Yum => run_sudo("yum", &["install", "-y", pkg])?,
             Self::Brew => run_cmd("brew", &["install", pkg])?,
         };
 
@@ -157,7 +149,6 @@ impl SysPkgManager {
         }
         Ok(())
     }
-
 }
 
 /// Run a script from a URL via curl | sh

@@ -14,13 +14,9 @@ impl Provider for OsProvider {
     }
 
     fn check(&self, state: &StateItem) -> Result<CheckResult> {
-        let pm = SysPkgManager::detect()
-            .ok_or_else(|| anyhow::anyhow!("No supported package manager found"))?;
-
-        // Delegate to webi on RHEL/CentOS
-        if matches!(pm, SysPkgManager::Dnf | SysPkgManager::Yum) {
+        let Some(pm) = SysPkgManager::detect() else {
             return WebiProvider.check(state);
-        }
+        };
 
         let (pkg_name, _) = crate::util::parse_spec(&state.key);
         let installed = match pm {
@@ -29,7 +25,6 @@ impl Provider for OsProvider {
                 let output = run_cmd("dpkg-query", &["-W", "-f=${Status}", &pkg_name])?;
                 String::from_utf8_lossy(&output.stdout).contains("install ok installed")
             }
-            SysPkgManager::Dnf | SysPkgManager::Yum => unreachable!(),
             SysPkgManager::Brew => run_cmd_ok("brew", &["list", &pkg_name]),
         };
 
@@ -43,13 +38,9 @@ impl Provider for OsProvider {
     }
 
     fn apply(&self, state: &StateItem) -> Result<()> {
-        let pm = SysPkgManager::detect()
-            .ok_or_else(|| anyhow::anyhow!("No supported package manager found"))?;
-
-        // Delegate to webi on RHEL/CentOS
-        if matches!(pm, SysPkgManager::Dnf | SysPkgManager::Yum) {
+        let Some(pm) = SysPkgManager::detect() else {
             return WebiProvider.apply(state);
-        }
+        };
 
         let (pkg_name, _) = crate::util::parse_spec(&state.key);
         pm.install(&pkg_name)
