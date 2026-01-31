@@ -78,7 +78,7 @@ pub fn get_bake_info() -> Option<String> {
     let timestamp = std::str::from_utf8(&footer[48..112]).ok()?.trim_end_matches('\0');
     let user_host = std::str::from_utf8(&footer[112..176]).ok()?.trim_end_matches('\0');
 
-    Some(format!("Baked with dek on {} by {}", timestamp, user_host))
+    Some(format!("Baked on {} by {}", timestamp, user_host))
 }
 
 /// Bake a config path into a standalone binary

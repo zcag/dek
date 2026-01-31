@@ -657,6 +657,7 @@ fn print_rich_help(meta: Option<&config::Meta>, config_path: &PathBuf) -> Result
         (None, None) => {}
     }
     if let Some(info) = bake::get_bake_info() {
+        println!("  {}", "Powered by dek (https://github.com/zcag/dek)".dimmed());
         println!("  {}", info.dimmed());
     }
     println!();
