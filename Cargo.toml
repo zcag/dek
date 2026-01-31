@@ -1,6 +1,6 @@
 [package]
 name = "dek"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 description = "Declarative environment setup and scripted workflows from TOML"
 license = "MIT"
