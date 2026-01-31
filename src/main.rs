@@ -628,14 +628,26 @@ fn print_rich_help(meta: Option<&config::Meta>, config_path: &PathBuf) -> Result
 
     // Usage
     println!("  {}", "USAGE".dimmed());
-    println!("    {} {}", exe_name.cyan(), "apply".white());
-    if !configs.is_empty() {
-        let example_keys: Vec<_> = configs.iter().take(2).map(|c| c.key.as_str()).collect();
-        println!("    {} {} {}", exe_name.cyan(), "apply".white(), example_keys.join(" ").dimmed());
-    }
-    println!("    {} {}", exe_name.cyan(), "check".white());
-    println!("    {} {} {}", exe_name.cyan(), "run".white(), "<command>".dimmed());
-    println!("    {} {}", exe_name.cyan(), "test".white());
+    println!("    {} {} {}", exe_name.cyan(), "[OPTIONS]".dimmed(), "<COMMAND>".white());
+    println!();
+
+    // Commands
+    println!("  {}", "COMMANDS".dimmed());
+    println!("    {}      {}", "apply".white(), "Apply configuration".dimmed());
+    println!("    {}      {}", "check".white(), "Check what would change (dry-run)".dimmed());
+    println!("    {}       {}", "plan".white(), "List items from config".dimmed());
+    println!("    {}       {}", "list".white(), "List available configs".dimmed());
+    println!("    {}        {}", "run".white(), "Run a command from config".dimmed());
+    println!("    {}       {}", "test".white(), "Test in container".dimmed());
+    println!("    {}       {}", "bake".white(), "Bake into standalone binary".dimmed());
+    println!();
+
+    // Options
+    println!("  {}", "OPTIONS".dimmed());
+    println!("    {}  {}", "-C, --config <PATH>".white(), "Config path".dimmed());
+    println!("    {}  {}", "-t, --target <HOST>".white(), "Remote target (user@host)".dimmed());
+    println!("    {}              {}", "-h, --help".white(), "Print help".dimmed());
+    println!("    {}           {}", "-V, --version".white(), "Print version".dimmed());
     println!();
 
     // Available configs
@@ -659,7 +671,7 @@ fn print_rich_help(meta: Option<&config::Meta>, config_path: &PathBuf) -> Result
     // Run commands
     if let Some(run) = &cfg.run {
         if !run.is_empty() {
-            println!("  {}", "COMMANDS".dimmed());
+            println!("  {}", "RUN".dimmed());
             let mut cmds: Vec<_> = run.iter().collect();
             cmds.sort_by_key(|(k, _)| *k);
             for (cmd_name, rc) in cmds {
