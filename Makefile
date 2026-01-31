@@ -13,7 +13,7 @@ install:
 watch:
 	cargo watch -x 'run --'
 
-# Bump patch version, commit, tag, and push
+# Bump patch version, commit, tag, push, and publish
 release:
 	@VERSION=$$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/'); \
 	MAJOR=$$(echo $$VERSION | cut -d. -f1); \
@@ -27,4 +27,5 @@ release:
 	git commit -m "v$$NEW_VERSION"; \
 	git tag "v$$NEW_VERSION"; \
 	git push && git push --tags; \
+	cargo publish; \
 	echo "Released v$$NEW_VERSION"
