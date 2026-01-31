@@ -110,6 +110,8 @@ pub struct RunConfig {
     pub cmd: Option<String>,
     /// Script file path (relative to config dir)
     pub script: Option<String>,
+    /// Inline provider config to apply
+    pub file: Option<FileConfig>,
 }
 
 /// Info about a config file (for listing)

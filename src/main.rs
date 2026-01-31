@@ -366,31 +366,51 @@ fn run_command(config_path: Option<PathBuf>, name: Option<String>, args: Vec<Str
         println!();
     }
 
-    // Get the command to run
-    let cmd_str = if let Some(ref cmd) = run_config.cmd {
-        cmd.clone()
+    // Apply inline file config if present
+    if let Some(ref file_config) = run_config.file {
+        let inline_config = config::Config {
+            file: Some(file_config.clone()),
+            ..Default::default()
+        };
+        let run = runner::Runner::new(runner::Mode::Apply);
+        run.run(&inline_config, &resolved_path)?;
+    }
+
+    // Run shell command if present
+    if let Some(ref cmd) = run_config.cmd {
+        let status = Command::new("sh")
+            .arg("-c")
+            .arg(cmd)
+            .arg("_")
+            .args(&args)
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status()?;
+
+        if !status.success() {
+            bail!("Command '{}' exited with status {}", name, status);
+        }
     } else if let Some(ref script_path) = run_config.script {
         let full_path = base_dir.join(script_path);
-        std::fs::read_to_string(&full_path)
-            .map_err(|e| anyhow::anyhow!("Failed to read script '{}': {}", full_path.display(), e))?
-    } else {
-        bail!("Command '{}' has neither 'cmd' nor 'script' defined", name);
-    };
+        let script = std::fs::read_to_string(&full_path)
+            .map_err(|e| anyhow::anyhow!("Failed to read script '{}': {}", full_path.display(), e))?;
 
-    // Run the command
-    // sh -c 'script' _ arg1 arg2  (underscore becomes $0, arg1 becomes $1)
-    let status = Command::new("sh")
-        .arg("-c")
-        .arg(&cmd_str)
-        .arg("_")  // $0 placeholder
-        .args(&args)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()?;
+        let status = Command::new("sh")
+            .arg("-c")
+            .arg(&script)
+            .arg("_")
+            .args(&args)
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status()?;
 
-    if !status.success() {
-        bail!("Command '{}' exited with status {}", name, status);
+        if !status.success() {
+            bail!("Command '{}' exited with status {}", name, status);
+        }
+    } else if run_config.file.is_none() {
+        bail!("Command '{}' has no action defined (needs cmd, script, or file)", name);
     }
 
     Ok(())
