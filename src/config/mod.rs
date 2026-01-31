@@ -299,6 +299,16 @@ fn extract_tar_gz(path: &Path) -> Result<PathBuf> {
     Ok(cache_dir)
 }
 
+/// Resolve config path - extracts tar.gz if needed, returns actual path for runner
+pub fn resolve_path<P: AsRef<Path>>(path: P) -> Result<PathBuf> {
+    let path = path.as_ref();
+    if is_tar_gz(path) {
+        extract_tar_gz(path)
+    } else {
+        Ok(path.to_path_buf())
+    }
+}
+
 pub fn find_default_config() -> Option<std::path::PathBuf> {
     let file = Path::new("dek.toml");
     if file.exists() {

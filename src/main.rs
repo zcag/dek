@@ -162,7 +162,8 @@ fn resolve_config(config: Option<PathBuf>) -> Result<PathBuf> {
 
 fn run_apply(config_path: Option<PathBuf>, configs: Vec<String>) -> Result<()> {
     let path = resolve_config(config_path)?;
-    let meta = config::load_meta(&path);
+    let resolved_path = config::resolve_path(&path)?;
+    let meta = config::load_meta(&resolved_path);
 
     // Show banner or default header
     if let Some(banner) = meta.as_ref().and_then(|m| m.banner.as_ref()) {
@@ -181,18 +182,19 @@ fn run_apply(config_path: Option<PathBuf>, configs: Vec<String>) -> Result<()> {
     println!();
 
     let config = if configs.is_empty() {
-        config::load(&path)?
+        config::load(&resolved_path)?
     } else {
-        config::load_selected(&path, &configs)?
+        config::load_selected(&resolved_path, &configs)?
     };
 
     let runner = runner::Runner::new(runner::Mode::Apply);
-    runner.run(&config, &path)
+    runner.run(&config, &resolved_path)
 }
 
 fn run_check(config_path: Option<PathBuf>, configs: Vec<String>) -> Result<()> {
     let path = resolve_config(config_path)?;
-    let meta = config::load_meta(&path);
+    let resolved_path = config::resolve_path(&path)?;
+    let meta = config::load_meta(&resolved_path);
 
     if let Some(banner) = meta.as_ref().and_then(|m| m.banner.as_ref()) {
         println!("{}", banner.bold());
@@ -210,18 +212,19 @@ fn run_check(config_path: Option<PathBuf>, configs: Vec<String>) -> Result<()> {
     println!();
 
     let config = if configs.is_empty() {
-        config::load(&path)?
+        config::load(&resolved_path)?
     } else {
-        config::load_selected(&path, &configs)?
+        config::load_selected(&resolved_path, &configs)?
     };
 
     let runner = runner::Runner::new(runner::Mode::Check);
-    runner.run(&config, &path)
+    runner.run(&config, &resolved_path)
 }
 
 fn run_plan(config_path: Option<PathBuf>, configs: Vec<String>) -> Result<()> {
     let path = resolve_config(config_path)?;
-    let meta = config::load_meta(&path);
+    let resolved_path = config::resolve_path(&path)?;
+    let meta = config::load_meta(&resolved_path);
 
     if let Some(banner) = meta.as_ref().and_then(|m| m.banner.as_ref()) {
         println!("{}", banner.bold());
@@ -239,13 +242,13 @@ fn run_plan(config_path: Option<PathBuf>, configs: Vec<String>) -> Result<()> {
     println!();
 
     let config = if configs.is_empty() {
-        config::load(&path)?
+        config::load(&resolved_path)?
     } else {
-        config::load_selected(&path, &configs)?
+        config::load_selected(&resolved_path, &configs)?
     };
 
     let runner = runner::Runner::new(runner::Mode::Plan);
-    runner.run(&config, &path)
+    runner.run(&config, &resolved_path)
 }
 
 fn run_list(config_path: Option<PathBuf>) -> Result<()> {
@@ -279,7 +282,8 @@ fn run_command(config_path: Option<PathBuf>, name: Option<String>, args: Vec<Str
     use std::process::Command;
 
     let path = resolve_config(config_path)?;
-    let config = config::load(&path)?;
+    let resolved_path = config::resolve_path(&path)?;
+    let config = config::load(&resolved_path)?;
 
     // If no name provided, list available commands
     let name = match name {
@@ -306,10 +310,10 @@ fn run_command(config_path: Option<PathBuf>, name: Option<String>, args: Vec<Str
         }
     };
 
-    let base_dir = if path.is_file() {
-        path.parent().unwrap_or(std::path::Path::new(".")).to_path_buf()
+    let base_dir = if resolved_path.is_file() {
+        resolved_path.parent().unwrap_or(std::path::Path::new(".")).to_path_buf()
     } else {
-        path.clone()
+        resolved_path.clone()
     };
 
     let run_config = config.run.as_ref()
