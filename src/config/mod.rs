@@ -4,11 +4,18 @@ pub use types::*;
 
 use anyhow::{Context, Result};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Load all configs from path (merges all .toml files if directory)
 pub fn load<P: AsRef<Path>>(path: P) -> Result<Config> {
     let path = path.as_ref();
+
+    // Handle tar.gz - extract to cache first
+    if is_tar_gz(path) {
+        let extracted = extract_tar_gz(path)?;
+        return load_directory(&extracted, None);
+    }
+
     if path.is_dir() {
         load_directory(path, None)
     } else {
@@ -21,6 +28,13 @@ pub fn load<P: AsRef<Path>>(path: P) -> Result<Config> {
 /// Also searches optional/ subdirectory
 pub fn load_selected<P: AsRef<Path>>(path: P, keys: &[String]) -> Result<Config> {
     let path = path.as_ref();
+
+    // Handle tar.gz - extract to cache first
+    if is_tar_gz(path) {
+        let extracted = extract_tar_gz(path)?;
+        return load_directory_with_optional(&extracted, Some(keys));
+    }
+
     if path.is_dir() {
         load_directory_with_optional(path, Some(keys))
     } else {
@@ -32,6 +46,13 @@ pub fn load_selected<P: AsRef<Path>>(path: P, keys: &[String]) -> Result<Config>
 /// List available config files with their metadata
 pub fn list_configs<P: AsRef<Path>>(path: P) -> Result<Vec<ConfigInfo>> {
     let path = path.as_ref();
+
+    // Handle tar.gz - extract to cache first
+    if is_tar_gz(path) {
+        let extracted = extract_tar_gz(path)?;
+        return list_configs(&extracted);
+    }
+
     if !path.is_dir() {
         return Ok(vec![]);
     }
@@ -247,6 +268,35 @@ fn merge_package_list(base: &mut Option<PackageList>, other: Option<PackageList>
             .items
             .extend(other_list.items);
     }
+}
+
+fn is_tar_gz(path: &Path) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    name.ends_with(".tar.gz") || name.ends_with(".tgz")
+}
+
+fn extract_tar_gz(path: &Path) -> Result<PathBuf> {
+    let data = fs::read(path).with_context(|| format!("Failed to read: {}", path.display()))?;
+
+    // Hash for cache key
+    let hash = format!("{:x}", md5::compute(&data));
+    let cache_dir = PathBuf::from(format!("/tmp/dek-{}", hash));
+
+    // Already extracted?
+    if cache_dir.exists() {
+        return Ok(cache_dir);
+    }
+
+    // Extract
+    let decoder = flate2::read::GzDecoder::new(&data[..]);
+    let mut archive = tar::Archive::new(decoder);
+    fs::create_dir_all(&cache_dir)
+        .with_context(|| format!("Failed to create cache dir: {}", cache_dir.display()))?;
+    archive
+        .unpack(&cache_dir)
+        .with_context(|| format!("Failed to extract: {}", path.display()))?;
+
+    Ok(cache_dir)
 }
 
 pub fn find_default_config() -> Option<std::path::PathBuf> {
