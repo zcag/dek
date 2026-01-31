@@ -648,11 +648,13 @@ fn print_rich_help(meta: Option<&config::Meta>, config_path: &PathBuf) -> Result
         println!();
         println!("  {}", name.bold());
     }
-    if let Some(desc) = meta.and_then(|m| m.description.as_ref()) {
-        println!("  {}", desc.dimmed());
-    }
-    if let Some(version) = meta.and_then(|m| m.version.as_ref()) {
-        println!("  {}", format!("v{}", version).dimmed());
+    let desc = meta.and_then(|m| m.description.as_ref());
+    let version = meta.and_then(|m| m.version.as_ref());
+    match (desc, version) {
+        (Some(d), Some(v)) => println!("  {} {}", d.dimmed(), format!("v{}", v).dimmed()),
+        (Some(d), None) => println!("  {}", d.dimmed()),
+        (None, Some(v)) => println!("  {}", format!("v{}", v).dimmed()),
+        (None, None) => {}
     }
     if let Some(info) = bake::get_bake_info() {
         println!("  {}", info.dimmed());
