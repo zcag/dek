@@ -13,6 +13,10 @@ pkg-url = "{ repo }/releases/download/v{ version }/dek-{ target }.tar.gz"
 bin-dir = "dek-{ target }/{ bin }{ binary-ext }"
 pkg-fmt = "tgz"
 
+[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/dek-x86_64-unknown-linux-musl.tar.gz"
+bin-dir = "dek-x86_64-unknown-linux-musl/{ bin }"
+
 [dependencies]
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
