@@ -77,6 +77,10 @@ enum Commands {
     },
     /// Bake config into standalone binary
     Bake {
+        /// Config file or directory to embed
+        #[arg(value_name = "CONFIG")]
+        config: Option<PathBuf>,
+
         /// Output binary path
         #[arg(short, long, default_value = "dek-baked")]
         output: PathBuf,
@@ -133,7 +137,9 @@ fn main() -> Result<()> {
         }
         Some(Commands::Run { name, args }) => run_command(config, name, args),
         Some(Commands::Test { image, keep }) => run_test(config, image, keep),
-        Some(Commands::Bake { output }) => bake::run(config, output),
+        Some(Commands::Bake { config: bake_config, output }) => {
+            bake::run(bake_config.or(config), output)
+        }
         Some(Commands::Completions { shell }) => {
             generate(shell, &mut Cli::command(), "dek", &mut io::stdout());
             Ok(())
