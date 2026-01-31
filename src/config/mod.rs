@@ -8,37 +8,27 @@ use std::path::{Path, PathBuf};
 
 /// Load all configs from path (merges all .toml files if directory)
 pub fn load<P: AsRef<Path>>(path: P) -> Result<Config> {
-    let path = path.as_ref();
-
-    // Handle tar.gz - extract to cache first
-    if is_tar_gz(path) {
-        let extracted = extract_tar_gz(path)?;
-        return load_directory(&extracted, None);
-    }
-
-    if path.is_dir() {
-        load_directory(path, None)
-    } else {
-        load_file(path)
-    }
+    load_filtered(path, None)
 }
 
 /// Load specific configs by key (e.g., "tools", "config")
 /// Key is derived from filename: "10-tools.toml" -> "tools"
-/// Also searches optional/ subdirectory
+/// Also searches optional/ subdirectory when keys specified
 pub fn load_selected<P: AsRef<Path>>(path: P, keys: &[String]) -> Result<Config> {
+    load_filtered(path, Some(keys))
+}
+
+fn load_filtered<P: AsRef<Path>>(path: P, filter_keys: Option<&[String]>) -> Result<Config> {
     let path = path.as_ref();
 
-    // Handle tar.gz - extract to cache first
     if is_tar_gz(path) {
         let extracted = extract_tar_gz(path)?;
-        return load_directory_with_optional(&extracted, Some(keys));
+        return load_directory(&extracted, filter_keys);
     }
 
     if path.is_dir() {
-        load_directory_with_optional(path, Some(keys))
+        load_directory(path, filter_keys)
     } else {
-        // Single file - just load it
         load_file(path)
     }
 }
@@ -47,7 +37,6 @@ pub fn load_selected<P: AsRef<Path>>(path: P, keys: &[String]) -> Result<Config>
 pub fn list_configs<P: AsRef<Path>>(path: P) -> Result<Vec<ConfigInfo>> {
     let path = path.as_ref();
 
-    // Handle tar.gz - extract to cache first
     if is_tar_gz(path) {
         let extracted = extract_tar_gz(path)?;
         return list_configs(&extracted);
@@ -58,9 +47,18 @@ pub fn list_configs<P: AsRef<Path>>(path: P) -> Result<Vec<ConfigInfo>> {
     }
 
     let mut configs = Vec::new();
+    list_configs_from_dir(path, false, &mut configs)?;
 
-    // Main configs
-    for entry in get_config_entries(path)? {
+    let optional_dir = path.join("optional");
+    if optional_dir.is_dir() {
+        list_configs_from_dir(&optional_dir, true, &mut configs)?;
+    }
+
+    Ok(configs)
+}
+
+fn list_configs_from_dir(dir: &Path, optional: bool, configs: &mut Vec<ConfigInfo>) -> Result<()> {
+    for entry in get_config_entries(dir)? {
         let key = file_key(&entry.path());
         if key == "meta" {
             continue;
@@ -72,29 +70,9 @@ pub fn list_configs<P: AsRef<Path>>(path: P) -> Result<Vec<ConfigInfo>> {
             .and_then(|m| m.name.clone())
             .unwrap_or_else(|| key.clone());
         let description = config.meta.as_ref().and_then(|m| m.description.clone());
-        configs.push(ConfigInfo { key, name, description, optional: false });
+        configs.push(ConfigInfo { key, name, description, optional });
     }
-
-    // Optional configs
-    let optional_dir = path.join("optional");
-    if optional_dir.is_dir() {
-        for entry in get_config_entries(&optional_dir)? {
-            let key = file_key(&entry.path());
-            if key == "meta" {
-                continue;
-            }
-            let config = load_file(&entry.path())?;
-            let name = config
-                .meta
-                .as_ref()
-                .and_then(|m| m.name.clone())
-                .unwrap_or_else(|| key.clone());
-            let description = config.meta.as_ref().and_then(|m| m.description.clone());
-            configs.push(ConfigInfo { key, name, description, optional: true });
-        }
-    }
-
-    Ok(configs)
+    Ok(())
 }
 
 fn load_file(path: &Path) -> Result<Config> {
@@ -108,31 +86,21 @@ fn load_file(path: &Path) -> Result<Config> {
 fn load_directory(dir: &Path, filter_keys: Option<&[String]>) -> Result<Config> {
     let mut merged = Config::default();
 
-    for entry in get_config_entries(dir)? {
-        let key = file_key(&entry.path());
-        if key == "meta" {
-            continue; // Skip meta.toml
-        }
+    // Load from main directory
+    load_from_dir(dir, filter_keys, &mut merged)?;
 
-        // Filter by keys if specified
-        if let Some(keys) = filter_keys {
-            if !keys.iter().any(|k| k == &key) {
-                continue;
-            }
+    // Also check optional/ when specific keys requested
+    if filter_keys.is_some() {
+        let optional_dir = dir.join("optional");
+        if optional_dir.is_dir() {
+            load_from_dir(&optional_dir, filter_keys, &mut merged)?;
         }
-
-        let config = load_file(&entry.path())?;
-        merge_config(&mut merged, config);
     }
 
     Ok(merged)
 }
 
-/// Load configs, including optional/ when keys are specified
-fn load_directory_with_optional(dir: &Path, filter_keys: Option<&[String]>) -> Result<Config> {
-    let mut merged = Config::default();
-
-    // Load from main directory
+fn load_from_dir(dir: &Path, filter_keys: Option<&[String]>, merged: &mut Config) -> Result<()> {
     for entry in get_config_entries(dir)? {
         let key = file_key(&entry.path());
         if key == "meta" {
@@ -146,30 +114,9 @@ fn load_directory_with_optional(dir: &Path, filter_keys: Option<&[String]>) -> R
         }
 
         let config = load_file(&entry.path())?;
-        merge_config(&mut merged, config);
+        merge_config(merged, config);
     }
-
-    // Also check optional/ when specific keys requested
-    if let Some(keys) = filter_keys {
-        let optional_dir = dir.join("optional");
-        if optional_dir.is_dir() {
-            for entry in get_config_entries(&optional_dir)? {
-                let key = file_key(&entry.path());
-                if key == "meta" {
-                    continue;
-                }
-
-                if !keys.iter().any(|k| k == &key) {
-                    continue;
-                }
-
-                let config = load_file(&entry.path())?;
-                merge_config(&mut merged, config);
-            }
-        }
-    }
-
-    Ok(merged)
+    Ok(())
 }
 
 fn get_config_entries(dir: &Path) -> Result<Vec<fs::DirEntry>> {
