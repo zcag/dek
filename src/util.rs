@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -153,4 +154,32 @@ pub fn run_install_script(url: &str, args: &[&str]) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Check if path is a tar.gz file
+pub fn is_tar_gz(path: &Path) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    name.ends_with(".tar.gz") || name.ends_with(".tgz")
+}
+
+/// Extract tar.gz to cache directory, returns extracted path
+pub fn extract_tar_gz(path: &Path) -> Result<PathBuf> {
+    let data = fs::read(path).with_context(|| format!("Failed to read: {}", path.display()))?;
+
+    let hash = format!("{:x}", md5::compute(&data));
+    let cache_dir = PathBuf::from(format!("/tmp/dek-{}", hash));
+
+    if cache_dir.exists() {
+        return Ok(cache_dir);
+    }
+
+    let decoder = flate2::read::GzDecoder::new(&data[..]);
+    let mut archive = tar::Archive::new(decoder);
+    fs::create_dir_all(&cache_dir)
+        .with_context(|| format!("Failed to create cache dir: {}", cache_dir.display()))?;
+    archive
+        .unpack(&cache_dir)
+        .with_context(|| format!("Failed to extract: {}", path.display()))?;
+
+    Ok(cache_dir)
 }

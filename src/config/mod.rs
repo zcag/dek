@@ -21,8 +21,8 @@ pub fn load_selected<P: AsRef<Path>>(path: P, keys: &[String]) -> Result<Config>
 fn load_filtered<P: AsRef<Path>>(path: P, filter_keys: Option<&[String]>) -> Result<Config> {
     let path = path.as_ref();
 
-    if is_tar_gz(path) {
-        let extracted = extract_tar_gz(path)?;
+    if crate::util::is_tar_gz(path) {
+        let extracted = crate::util::extract_tar_gz(path)?;
         return load_directory(&extracted, filter_keys);
     }
 
@@ -37,8 +37,8 @@ fn load_filtered<P: AsRef<Path>>(path: P, filter_keys: Option<&[String]>) -> Res
 pub fn list_configs<P: AsRef<Path>>(path: P) -> Result<Vec<ConfigInfo>> {
     let path = path.as_ref();
 
-    if is_tar_gz(path) {
-        let extracted = extract_tar_gz(path)?;
+    if crate::util::is_tar_gz(path) {
+        let extracted = crate::util::extract_tar_gz(path)?;
         return list_configs(&extracted);
     }
 
@@ -217,40 +217,11 @@ fn merge_package_list(base: &mut Option<PackageList>, other: Option<PackageList>
     }
 }
 
-fn is_tar_gz(path: &Path) -> bool {
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    name.ends_with(".tar.gz") || name.ends_with(".tgz")
-}
-
-fn extract_tar_gz(path: &Path) -> Result<PathBuf> {
-    let data = fs::read(path).with_context(|| format!("Failed to read: {}", path.display()))?;
-
-    // Hash for cache key
-    let hash = format!("{:x}", md5::compute(&data));
-    let cache_dir = PathBuf::from(format!("/tmp/dek-{}", hash));
-
-    // Already extracted?
-    if cache_dir.exists() {
-        return Ok(cache_dir);
-    }
-
-    // Extract
-    let decoder = flate2::read::GzDecoder::new(&data[..]);
-    let mut archive = tar::Archive::new(decoder);
-    fs::create_dir_all(&cache_dir)
-        .with_context(|| format!("Failed to create cache dir: {}", cache_dir.display()))?;
-    archive
-        .unpack(&cache_dir)
-        .with_context(|| format!("Failed to extract: {}", path.display()))?;
-
-    Ok(cache_dir)
-}
-
 /// Resolve config path - extracts tar.gz if needed, returns actual path for runner
 pub fn resolve_path<P: AsRef<Path>>(path: P) -> Result<PathBuf> {
     let path = path.as_ref();
-    if is_tar_gz(path) {
-        extract_tar_gz(path)
+    if crate::util::is_tar_gz(path) {
+        crate::util::extract_tar_gz(path)
     } else {
         Ok(path.to_path_buf())
     }

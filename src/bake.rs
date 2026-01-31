@@ -94,9 +94,9 @@ pub fn run(config_path: Option<PathBuf>, output: PathBuf) -> Result<()> {
     println!();
 
     // Handle tar.gz input - extract first, then re-tarball
-    let actual_path = if is_tar_gz(&config_path) {
+    let actual_path = if crate::util::is_tar_gz(&config_path) {
         println!("  {} Extracting archive...", "→".yellow());
-        extract_tar_gz_for_bake(&config_path)?
+        crate::util::extract_tar_gz(&config_path)?
     } else {
         config_path
     };
@@ -192,24 +192,4 @@ fn format_size(bytes: u64) -> String {
     } else {
         format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
     }
-}
-
-fn is_tar_gz(path: &Path) -> bool {
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    name.ends_with(".tar.gz") || name.ends_with(".tgz")
-}
-
-fn extract_tar_gz_for_bake(path: &Path) -> Result<PathBuf> {
-    let data = fs::read(path)?;
-    let hash = format!("{:x}", md5::compute(&data));
-    let cache_dir = PathBuf::from(format!("/tmp/dek-{}", hash));
-
-    if !cache_dir.exists() {
-        let decoder = flate2::read::GzDecoder::new(&data[..]);
-        let mut archive = tar::Archive::new(decoder);
-        fs::create_dir_all(&cache_dir)?;
-        archive.unpack(&cache_dir)?;
-    }
-
-    Ok(cache_dir)
 }
