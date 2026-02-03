@@ -38,6 +38,9 @@ pub struct Config {
     pub run: Option<HashMap<String, RunConfig>>,
     /// External files to include (source path → config-relative dest)
     pub include: Option<HashMap<String, String>>,
+    /// Assertions to check before apply
+    #[serde(default)]
+    pub assert: Vec<AssertConfig>,
 }
 
 /// Per-file metadata
@@ -139,4 +142,15 @@ pub struct Inventory {
     /// SSH host names (from ~/.ssh/config or resolvable)
     #[serde(default)]
     pub hosts: Vec<String>,
+}
+
+/// Assertion to check before apply
+#[derive(Debug, Deserialize, Clone)]
+pub struct AssertConfig {
+    /// Shell command to run
+    pub check: String,
+    /// Optional regex to match against stdout
+    pub stdout: Option<String>,
+    /// Optional regex to match against stderr
+    pub stderr: Option<String>,
 }

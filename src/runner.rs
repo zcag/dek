@@ -264,5 +264,15 @@ fn collect_state_items(config: &Config, base_dir: &Path) -> Vec<StateItem> {
         }
     }
 
+    // Assertions
+    for assertion in &config.assert {
+        // Encode: check\0stdout_pattern\0stderr_pattern
+        let stdout = assertion.stdout.as_deref().unwrap_or("");
+        let stderr = assertion.stderr.as_deref().unwrap_or("");
+        let value = format!("{}\x00{}", stdout, stderr);
+        items.push(StateItem::new("assert", &assertion.check).with_value(value));
+    }
+
     items
 }
+

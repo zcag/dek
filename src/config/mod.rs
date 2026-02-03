@@ -212,6 +212,9 @@ fn merge_config(base: &mut Config, other: Config) {
     if let Some(include) = other.include {
         base.include.get_or_insert_with(Default::default).extend(include);
     }
+
+    // Merge assertions
+    base.assert.extend(other.assert);
 }
 
 fn merge_package_list(base: &mut Option<PackageList>, other: Option<PackageList>) {

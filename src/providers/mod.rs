@@ -1,3 +1,4 @@
+pub mod assert;
 pub mod command;
 pub mod file;
 pub mod package;
@@ -284,6 +285,7 @@ impl ProviderRegistry {
             Box::new(shell::EnvProvider),
             Box::new(command::CommandProvider),
             Box::new(script::ScriptProvider),
+            Box::new(assert::AssertProvider),
         ];
 
         Self { providers }
