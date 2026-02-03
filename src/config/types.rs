@@ -36,6 +36,8 @@ pub struct Config {
     pub script: Option<HashMap<String, String>>,
     /// Runnable commands (dek run <name>)
     pub run: Option<HashMap<String, RunConfig>>,
+    /// External files to include (source path → config-relative dest)
+    pub include: Option<HashMap<String, String>>,
 }
 
 /// Per-file metadata
@@ -112,6 +114,9 @@ pub struct RunConfig {
     pub script: Option<String>,
     /// Inline provider config to apply
     pub file: Option<FileConfig>,
+    /// Run locally before remote deployment (with --remotes)
+    #[serde(default)]
+    pub local: bool,
 }
 
 /// Info about a config file (for listing)

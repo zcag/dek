@@ -306,6 +306,7 @@ fn run_remotes(pattern: &str, cmd: &str, config_path: Option<PathBuf>, configs: 
     use std::io::{self, Write};
 
     let config_path = resolve_config(config_path.clone())?;
+    let config_abs = std::fs::canonicalize(&config_path)?;
     let inventory = config::load_inventory(&config_path)
         .ok_or_else(|| anyhow::anyhow!("No inventory.toml found in config directory"))?;
 
@@ -324,10 +325,36 @@ fn run_remotes(pattern: &str, cmd: &str, config_path: Option<PathBuf>, configs: 
         bail!("No hosts match pattern '{}'", pattern);
     }
 
-    // Show matched hosts and confirm
+    // Load config to check for local commands and includes
+    let dek_config = config::load(&config_path)?;
+
+    // Find local run commands
+    let local_cmds: Vec<(&String, &config::RunConfig)> = dek_config
+        .run
+        .as_ref()
+        .map(|runs| runs.iter().filter(|(_, cfg)| cfg.local).collect())
+        .unwrap_or_default();
+
+    // Show plan
     println!("{} {} on {} host(s):", "::".blue(), cmd, matched.len());
     for host in &matched {
         println!("  {}", host);
+    }
+    if !local_cmds.is_empty() {
+        println!();
+        println!("{} Local commands to run first:", "::".blue());
+        for (name, _) in &local_cmds {
+            println!("  {}", name);
+        }
+    }
+    if let Some(ref includes) = dek_config.include {
+        if !includes.is_empty() {
+            println!();
+            println!("{} Files to include:", "::".blue());
+            for (src, dst) in includes {
+                println!("  {} → {}", src, dst);
+            }
+        }
     }
     println!();
 
@@ -341,10 +368,23 @@ fn run_remotes(pattern: &str, cmd: &str, config_path: Option<PathBuf>, configs: 
     }
     println!();
 
+    // Run local commands first
+    if !local_cmds.is_empty() {
+        println!("{} Running local commands...", "::".blue());
+        for (name, run_cfg) in &local_cmds {
+            println!("  {} {}", "→".yellow(), name);
+            run_local_command(name, run_cfg, &config_abs)?;
+        }
+        println!();
+    }
+
+    // Prepare config with includes
+    let prepared_config = prepare_config_with_includes(&config_abs, &dek_config)?;
+
     // Run on each host
     let mut failed = Vec::new();
     for host in &matched {
-        if let Err(e) = run_remote(host, cmd, Some(config_path.clone()), configs) {
+        if let Err(e) = run_remote(host, cmd, Some(prepared_config.clone()), configs) {
             eprintln!("{} {} failed: {}", "✗".red(), host, e);
             failed.push(host.as_str());
         }
@@ -364,6 +404,101 @@ fn run_remotes(pattern: &str, cmd: &str, config_path: Option<PathBuf>, configs: 
         bail!("{} host(s) failed", failed.len());
     }
 
+    Ok(())
+}
+
+fn run_local_command(name: &str, run_cfg: &config::RunConfig, config_path: &std::path::Path) -> Result<()> {
+    let base_dir = if config_path.is_dir() {
+        config_path
+    } else {
+        config_path.parent().unwrap_or(std::path::Path::new("."))
+    };
+
+    let script = if let Some(ref cmd) = run_cfg.cmd {
+        cmd.clone()
+    } else if let Some(ref script_path) = run_cfg.script {
+        let full_path = base_dir.join(script_path);
+        std::fs::read_to_string(&full_path)
+            .map_err(|e| anyhow::anyhow!("Failed to read script '{}': {}", full_path.display(), e))?
+    } else {
+        bail!("Local command '{}' has no cmd or script", name);
+    };
+
+    let status = Command::new("sh")
+        .arg("-c")
+        .arg(&script)
+        .current_dir(base_dir)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()?;
+
+    if !status.success() {
+        bail!("Local command '{}' failed", name);
+    }
+    Ok(())
+}
+
+fn prepare_config_with_includes(config_path: &std::path::Path, dek_config: &config::Config) -> Result<PathBuf> {
+    use std::fs;
+
+    let includes = match &dek_config.include {
+        Some(inc) if !inc.is_empty() => inc,
+        _ => return Ok(config_path.to_path_buf()), // No includes, use original
+    };
+
+    // Determine the base directory (config dir, or parent of config file)
+    let base_dir = if config_path.is_dir() {
+        config_path
+    } else {
+        config_path.parent().unwrap()
+    };
+
+    // Create temp directory and copy entire config directory
+    let temp_dir = tempfile::tempdir()?;
+    let temp_path = temp_dir.into_path(); // Keep it around
+    copy_dir_recursive(base_dir, &temp_path)?;
+
+    // Resolve and copy includes
+    for (src, dst) in includes {
+        let src_path = if src.starts_with('/') {
+            PathBuf::from(src)
+        } else {
+            base_dir.join(src)
+        };
+        let dst_path = temp_path.join(dst);
+
+        // Create parent directories
+        if let Some(parent) = dst_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            fs::copy(&src_path, &dst_path)
+                .map_err(|e| anyhow::anyhow!("Failed to copy '{}' to '{}': {}", src_path.display(), dst_path.display(), e))?;
+        }
+    }
+
+    Ok(temp_path)
+}
+
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
+    use std::fs;
+
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            fs::copy(&src_path, &dst_path)?;
+        }
+    }
     Ok(())
 }
 
