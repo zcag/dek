@@ -1,7 +1,5 @@
 # dek
 
-*pronounced "deynek"*
-
 Declarative environment setup. One TOML, any machine.
 
 ## Install
@@ -9,7 +7,7 @@ Declarative environment setup. One TOML, any machine.
 ```bash
 cargo install dek
 # or
-curl cagdas.io/dek | sh
+cargo binstall dek
 
 # setup completions
 dek setup
@@ -19,9 +17,9 @@ dek setup
 
 ```bash
 dek apply              # apply ./dek.toml or ./dek/
-dek apply setup.toml
 dek check              # dry-run, show what would change
-dek plan               # list items from config (no state check)
+dek plan               # list items (no state check)
+dek list               # list available configs
 ```
 
 ## Config
@@ -31,7 +29,7 @@ dek plan               # list items from config (no state check)
 [package.os]  # auto-detects: pacman, apt, dnf, brew
 items = ["curl", "git", "htop"]
 
-[package.cargo]  # auto-installs cargo/go/npm/pip if missing
+[package.cargo]
 items = ["bat", "eza", "ripgrep"]
 
 [package.go]
@@ -57,18 +55,28 @@ enabled = true
 "~/dotfiles/nvim" = "~/.config/nvim"
 
 [file.ensure_line]
-"~/.bashrc" = [
-    "export PATH=$HOME/.local/bin:$PATH",
-    "source ~/.aliases"
-]
+"~/.bashrc" = ["export PATH=$HOME/.local/bin:$PATH"]
 
-# Shell (auto-sources in your rc file)
+# Shell
 [alias]
 la = "ls -larth"
-lg = "lazygit"
 
 [env]
 EDITOR = "nvim"
+
+# Custom commands
+[[command]]
+name = "setup-db"
+check = "psql -c 'SELECT 1 FROM pg_database WHERE datname=mydb'"
+apply = "createdb mydb"
+
+# Assertions
+[[assert]]
+check = "docker --version"
+stdout = "Docker version 2[0-9]"
+
+[[assert]]
+check = "test -f /etc/hosts"
 ```
 
 ## Split Config
@@ -78,41 +86,104 @@ dek/
 ├── 00-packages.toml
 ├── 10-services.toml
 ├── 20-dotfiles.toml
-└── 30-shell.toml
+└── optional/
+    └── extra.toml      # only applied when explicitly requested
 ```
 
-Files are merged alphabetically.
+Files merged alphabetically. Use `dek apply extra` to include optional configs.
 
-## Test
+## Run Commands
 
-Spin up a container, apply config, drop into shell:
+Define reusable commands:
+
+```toml
+[run.deploy]
+description = "Deploy the application"
+deps = ["os.rsync"]
+cmd = "rsync -av ./dist/ server:/var/www/"
+
+[run.backup]
+description = "Backup database"
+script = "scripts/backup.sh"  # relative to config dir
+```
 
 ```bash
-dek test                    # archlinux by default
-dek test --image ubuntu
-dek test --keep             # don't destroy after exit
+dek run              # list available commands
+dek run deploy       # run command
+dek run backup arg1  # args passed via $@
 ```
 
-Builds dek locally and mounts into container - no compilation inside the container.
+## Remote
+
+Apply to remote hosts via SSH:
+
+```bash
+dek apply -t user@host
+dek check -t server1
+```
+
+### Multi-host with Inventory
+
+```toml
+# inventory.toml
+hosts = ["web-01", "web-02", "web-03", "db-master"]
+```
+
+```bash
+dek apply --remotes 'web-*'    # glob pattern
+dek apply --remotes '*'        # all hosts
+```
+
+Shows matched hosts and prompts for confirmation before applying.
+
+### Deploy Workflow
+
+For build-and-deploy workflows:
+
+```toml
+# Local build step (runs before remote)
+[run.build]
+local = true
+cmd = "mvn package -DskipTests"
+
+# Include build artifacts
+[include]
+"target/app.jar" = "artifacts/app.jar"
+
+# Deploy to remote
+[file.copy]
+"artifacts/app.jar" = "/opt/app/app.jar"
+
+[[service]]
+name = "app"
+state = "active"
+```
+
+```bash
+dek apply --remotes 'app-*'
+# 1. Runs build locally
+# 2. Includes fresh jar
+# 3. Ships to all app-* hosts
+# 4. Copies jar, restarts service
+```
 
 ## Inline
 
-Quick one-off installs without a config file:
+Quick installs without a config file:
 
 ```bash
 dek os.htop os.git cargo.bat
 dek pip.httpie npm.prettier
 ```
 
-Format: `provider.package` where provider is `os`, `apt`, `pacman`, `cargo`, `go`, `npm`, or `pip`.
+## Test
 
-`os` auto-detects your system package manager (pacman, apt, dnf, brew).
-
-## Remote (planned)
+Spin up a container to test your config:
 
 ```bash
-dek --target user@host apply
-dek --target user@host cargo.bat
+dek test                    # archlinux by default
+dek test --image ubuntu
+dek test --keep             # keep container after exit
 ```
 
 ## Bake
@@ -120,30 +191,19 @@ dek --target user@host cargo.bat
 Embed config into a standalone binary:
 
 ```bash
-dek bake dek.toml -o mysetup      # from file
-dek bake dek/ -o mysetup          # from directory
-./mysetup                          # applies config (default)
-./mysetup check                    # dry-run
-./mysetup info                     # show bake info
+dek bake ./dek -o mysetup
+./mysetup              # show help with available configs
+./mysetup apply        # apply all
+./mysetup run deploy   # run commands
 ```
 
 ## Package:Binary Syntax
 
-When package names differ from the binary they install, use `package:binary` syntax:
+When package and binary names differ:
 
 ```toml
 [package.cargo]
-items = ["bat", "ripgrep:rg", "fd-find:fd", "bottom:btm"]
-
-[package.webi]
-items = ["jq", "ripgrep:rg", "fzf"]
-
-[package.go]
-items = ["github.com/junegunn/fzf@latest"]  # auto-derives "fzf" from path
+items = ["ripgrep:rg", "fd-find:fd", "bottom:btm"]
 ```
 
-This tells dek to:
-1. Install the `package` part
-2. Check if the `binary` part exists in PATH
-
-Without `:binary`, dek assumes the binary name matches the package name (or derives it from go paths).
+Installs `ripgrep`, checks for `rg` in PATH.
