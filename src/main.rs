@@ -25,9 +25,13 @@ struct Cli {
     #[arg(short = 'C', long, global = true, value_name = "PATH")]
     config: Option<PathBuf>,
 
-    /// Remote target (user@host)
+    /// Remote target (user@host or ssh hostname)
     #[arg(short, long, global = true, value_name = "TARGET")]
     target: Option<String>,
+
+    /// Remote targets from inventory (glob pattern, e.g., 'logger*')
+    #[arg(long, global = true, value_name = "PATTERN")]
+    remotes: Option<String>,
 
     /// Inline install: provider.package (e.g., cargo.bat apt.htop)
     #[arg(value_name = "SPEC", trailing_var_arg = true)]
@@ -105,32 +109,41 @@ fn main() -> Result<()> {
 
     let config = cli.config;
     let target = cli.target;
+    let remotes = cli.remotes;
 
     match cli.command {
         Some(Commands::Apply { configs }) => {
-            if let Some(t) = target {
-                run_remote(&t, "apply", config, &configs)
+            if let Some(pattern) = remotes {
+                run_remotes(&pattern, "apply", config, &configs)
+            } else if let Some(t) = target {
+                run_remote(&t, "apply", config.clone(), &configs)
             } else {
                 run_mode(runner::Mode::Apply, config, configs)
             }
         }
         Some(Commands::Check { configs }) => {
-            if let Some(t) = target {
-                run_remote(&t, "check", config, &configs)
+            if let Some(pattern) = remotes {
+                run_remotes(&pattern, "check", config, &configs)
+            } else if let Some(t) = target {
+                run_remote(&t, "check", config.clone(), &configs)
             } else {
                 run_mode(runner::Mode::Check, config, configs)
             }
         }
         Some(Commands::Plan { configs }) => {
-            if let Some(t) = target {
-                run_remote(&t, "plan", config, &configs)
+            if let Some(pattern) = remotes {
+                run_remotes(&pattern, "plan", config, &configs)
+            } else if let Some(t) = target {
+                run_remote(&t, "plan", config.clone(), &configs)
             } else {
                 run_mode(runner::Mode::Plan, config, configs)
             }
         }
         Some(Commands::List) => {
-            if let Some(t) = target {
-                run_remote(&t, "list", config, &[])
+            if let Some(pattern) = remotes {
+                run_remotes(&pattern, "list", config, &[])
+            } else if let Some(t) = target {
+                run_remote(&t, "list", config.clone(), &[])
             } else {
                 run_list(config)
             }
@@ -284,6 +297,71 @@ fn run_remote(target: &str, cmd: &str, config_path: Option<PathBuf>, configs: &[
 
     if !status.success() {
         bail!("Remote command failed");
+    }
+
+    Ok(())
+}
+
+fn run_remotes(pattern: &str, cmd: &str, config_path: Option<PathBuf>, configs: &[String]) -> Result<()> {
+    use std::io::{self, Write};
+
+    let config_path = resolve_config(config_path.clone())?;
+    let inventory = config::load_inventory(&config_path)
+        .ok_or_else(|| anyhow::anyhow!("No inventory.toml found in config directory"))?;
+
+    if inventory.hosts.is_empty() {
+        bail!("No hosts defined in inventory.toml");
+    }
+
+    // Match hosts against pattern (simple glob: * matches any chars)
+    let regex_pattern = format!("^{}$", pattern.replace("*", ".*"));
+    let re = regex::Regex::new(&regex_pattern)
+        .map_err(|e| anyhow::anyhow!("Invalid pattern '{}': {}", pattern, e))?;
+
+    let matched: Vec<&String> = inventory.hosts.iter().filter(|h| re.is_match(h)).collect();
+
+    if matched.is_empty() {
+        bail!("No hosts match pattern '{}'", pattern);
+    }
+
+    // Show matched hosts and confirm
+    println!("{} {} on {} host(s):", "::".blue(), cmd, matched.len());
+    for host in &matched {
+        println!("  {}", host);
+    }
+    println!();
+
+    print!("Proceed? [y/N] ");
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    if !input.trim().eq_ignore_ascii_case("y") {
+        println!("Aborted");
+        return Ok(());
+    }
+    println!();
+
+    // Run on each host
+    let mut failed = Vec::new();
+    for host in &matched {
+        if let Err(e) = run_remote(host, cmd, Some(config_path.clone()), configs) {
+            eprintln!("{} {} failed: {}", "✗".red(), host, e);
+            failed.push(host.as_str());
+        }
+        println!();
+    }
+
+    // Summary
+    let succeeded = matched.len() - failed.len();
+    if failed.is_empty() {
+        println!("{} {}/{} hosts completed successfully", "✓".green(), succeeded, matched.len());
+    } else {
+        println!("{} {}/{} hosts completed successfully", "!".yellow(), succeeded, matched.len());
+    }
+
+    if !failed.is_empty() {
+        println!("Failed: {}", failed.join(", "));
+        bail!("{} host(s) failed", failed.len());
     }
 
     Ok(())
@@ -682,6 +760,7 @@ fn print_rich_help(meta: Option<&config::Meta>, config_path: &PathBuf) -> Result
     println!("  {}", "OPTIONS".dimmed());
     println!("    {}  {}", "-C, --config <PATH>".white(), "Config path".dimmed());
     println!("    {}  {}", "-t, --target <HOST>".white(), "Remote target (user@host)".dimmed());
+    println!("    {} {}", "--remotes <PATTERN>".white(), "Remote targets from inventory (glob)".dimmed());
     println!("    {}              {}", "-h, --help".white(), "Print help".dimmed());
     println!("    {}           {}", "-V, --version".white(), "Print version".dimmed());
     println!();

@@ -264,3 +264,17 @@ pub fn load_meta<P: AsRef<Path>>(config_path: P) -> Option<Meta> {
 
     Some(meta)
 }
+
+/// Load inventory.toml from config path
+pub fn load_inventory<P: AsRef<Path>>(config_path: P) -> Option<Inventory> {
+    let path = config_path.as_ref();
+    let dir = if path.is_dir() { path } else { path.parent()? };
+    let inventory_path = dir.join("inventory.toml");
+
+    if !inventory_path.exists() {
+        return None;
+    }
+
+    let content = fs::read_to_string(&inventory_path).ok()?;
+    toml::from_str(&content).ok()
+}

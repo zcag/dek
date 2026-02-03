@@ -126,3 +126,12 @@ pub struct ConfigInfo {
     /// Whether this is in optional/ (not applied by default)
     pub optional: bool,
 }
+
+/// Inventory of remote hosts (loaded from inventory.toml)
+#[derive(Debug, Deserialize, Default, Clone)]
+#[serde(default)]
+pub struct Inventory {
+    /// SSH host names (from ~/.ssh/config or resolvable)
+    #[serde(default)]
+    pub hosts: Vec<String>,
+}
