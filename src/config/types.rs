@@ -13,6 +13,8 @@ pub struct Meta {
     pub version: Option<String>,
     /// Banner text shown on apply
     pub banner: Option<String>,
+    /// Custom inventory path (absolute or relative to meta.toml)
+    pub inventory: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -90,6 +92,29 @@ pub struct FileConfig {
     pub copy: Option<HashMap<String, String>>,
     pub symlink: Option<HashMap<String, String>>,
     pub ensure_line: Option<HashMap<String, Vec<String>>>,
+    /// Structured line entries with original pattern matching
+    #[serde(default)]
+    pub line: Vec<FileLineConfig>,
+}
+
+/// Structured ensure_line with original pattern support
+#[derive(Debug, Deserialize, Clone)]
+pub struct FileLineConfig {
+    pub path: String,
+    pub line: String,
+    /// Regex pattern to match an existing line
+    pub original: Option<String>,
+    /// "replace" (default) or "below"
+    #[serde(default)]
+    pub mode: FileLineMode,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum FileLineMode {
+    #[default]
+    Replace,
+    Below,
 }
 
 /// Custom command with check/apply scripts
@@ -135,12 +160,9 @@ pub struct ConfigInfo {
     pub optional: bool,
 }
 
-/// Inventory of remote hosts (loaded from inventory.toml)
-#[derive(Debug, Deserialize, Default, Clone)]
-#[serde(default)]
+/// Inventory of remote hosts (loaded from inventory.ini)
+#[derive(Debug, Default, Clone)]
 pub struct Inventory {
-    /// SSH host names (from ~/.ssh/config or resolvable)
-    #[serde(default)]
     pub hosts: Vec<String>,
 }
 

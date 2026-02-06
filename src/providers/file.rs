@@ -191,13 +191,11 @@ impl Provider for EnsureLineProvider {
             .lines()
             .collect();
 
-        // Create parent directories
         if let Some(parent) = file_path.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create parent dirs for: {}", file_path.display()))?;
         }
 
-        // Read existing content or start empty
         let mut content = if file_path.exists() {
             fs::read_to_string(&file_path)
                 .with_context(|| format!("failed to read: {}", file_path.display()))?
@@ -205,7 +203,6 @@ impl Provider for EnsureLineProvider {
             String::new()
         };
 
-        // Append missing lines
         let mut modified = false;
         for line in lines_to_ensure {
             if !content.contains(line) {
@@ -222,6 +219,114 @@ impl Provider for EnsureLineProvider {
             fs::write(&file_path, &content)
                 .with_context(|| format!("failed to write: {}", file_path.display()))?;
         }
+
+        Ok(())
+    }
+}
+
+// =============================================================================
+// FILE.LINE - structured ensure_line with original pattern matching
+// =============================================================================
+
+pub struct FileLineProvider;
+
+impl Provider for FileLineProvider {
+    fn name(&self) -> &'static str {
+        "file.line"
+    }
+
+    fn check(&self, state: &StateItem) -> Result<CheckResult> {
+        let file_path = expand_path(&state.key);
+        let value = state.value.as_deref().unwrap_or("");
+        let line = value.split('\x01').next().unwrap_or("");
+
+        if !file_path.exists() {
+            return Ok(CheckResult::Missing {
+                detail: format!("file '{}' does not exist", file_path.display()),
+            });
+        }
+
+        let content = fs::read_to_string(&file_path)
+            .with_context(|| format!("failed to read: {}", file_path.display()))?;
+
+        if content.contains(line) {
+            Ok(CheckResult::Satisfied)
+        } else {
+            Ok(CheckResult::Missing {
+                detail: format!("line missing in '{}'", file_path.display()),
+            })
+        }
+    }
+
+    fn apply(&self, state: &StateItem) -> Result<()> {
+        let file_path = expand_path(&state.key);
+        let value = state.value.as_deref().unwrap_or("");
+        let parts: Vec<&str> = value.splitn(3, '\x01').collect();
+        let line = parts[0];
+        let original = parts.get(1).filter(|s| !s.is_empty()).copied();
+        let mode = parts.get(2).copied().unwrap_or("replace");
+
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create parent dirs for: {}", file_path.display()))?;
+        }
+
+        let mut content = if file_path.exists() {
+            fs::read_to_string(&file_path)
+                .with_context(|| format!("failed to read: {}", file_path.display()))?
+        } else {
+            String::new()
+        };
+
+        if content.contains(line) {
+            return Ok(());
+        }
+
+        if let Some(pattern) = original {
+            let re = regex::Regex::new(pattern)
+                .map_err(|e| anyhow::anyhow!("Invalid original regex '{}': {}", pattern, e))?;
+
+            let file_lines: Vec<&str> = content.lines().collect();
+            let mut new_lines: Vec<String> = Vec::with_capacity(file_lines.len() + 1);
+            let mut found = false;
+
+            for file_line in &file_lines {
+                if !found && re.is_match(file_line) {
+                    found = true;
+                    match mode {
+                        "below" => {
+                            new_lines.push(file_line.to_string());
+                            new_lines.push(line.to_string());
+                        }
+                        _ => new_lines.push(line.to_string()),
+                    }
+                } else {
+                    new_lines.push(file_line.to_string());
+                }
+            }
+
+            if found {
+                content = new_lines.join("\n");
+                if !content.ends_with('\n') {
+                    content.push('\n');
+                }
+            } else {
+                if !content.ends_with('\n') {
+                    content.push('\n');
+                }
+                content.push_str(line);
+                content.push('\n');
+            }
+        } else {
+            if !content.is_empty() && !content.ends_with('\n') {
+                content.push('\n');
+            }
+            content.push_str(line);
+            content.push('\n');
+        }
+
+        fs::write(&file_path, &content)
+            .with_context(|| format!("failed to write: {}", file_path.display()))?;
 
         Ok(())
     }

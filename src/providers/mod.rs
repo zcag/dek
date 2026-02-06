@@ -281,6 +281,7 @@ impl ProviderRegistry {
             Box::new(file::CopyProvider),
             Box::new(file::SymlinkProvider),
             Box::new(file::EnsureLineProvider),
+            Box::new(file::FileLineProvider),
             Box::new(shell::AliasProvider),
             Box::new(shell::EnvProvider),
             Box::new(command::CommandProvider),

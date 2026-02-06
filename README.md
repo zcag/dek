@@ -124,14 +124,28 @@ dek check -t server1
 
 ### Multi-host with Inventory
 
-```toml
-# inventory.toml
-hosts = ["web-01", "web-02", "web-03", "db-master"]
+Ansible-style `inventory.ini` (one host per line, `[groups]` and `;comments` ignored):
+
+```ini
+# inventory.ini
+[web]
+web-01
+web-02
+web-03
+
+[db]
+db-master
 ```
 
 ```bash
 dek apply --remotes 'web-*'    # glob pattern
 dek apply --remotes '*'        # all hosts
+```
+
+Override inventory path in `meta.toml`:
+
+```toml
+inventory = "../devops/inventory.ini"
 ```
 
 Shows matched hosts and prompts for confirmation before applying.

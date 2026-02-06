@@ -231,6 +231,16 @@ fn collect_state_items(config: &Config, base_dir: &Path) -> Vec<StateItem> {
                 items.push(StateItem::new("file.ensure_line", file).with_value(value));
             }
         }
+        for entry in &file.line {
+            use crate::config::FileLineMode;
+            let mode = match entry.mode {
+                FileLineMode::Replace => "replace",
+                FileLineMode::Below => "below",
+            };
+            let original = entry.original.as_deref().unwrap_or("");
+            let value = format!("{}\x01{}\x01{}", entry.line, original, mode);
+            items.push(StateItem::new("file.line", &entry.path).with_value(value));
+        }
     }
 
     // Aliases

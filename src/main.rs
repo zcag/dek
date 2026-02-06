@@ -30,7 +30,7 @@ struct Cli {
     target: Option<String>,
 
     /// Remote targets from inventory (glob pattern, e.g., 'logger*')
-    #[arg(long, global = true, value_name = "PATTERN")]
+    #[arg(short = 'r', long, global = true, value_name = "PATTERN")]
     remotes: Option<String>,
 
     /// Inline install: provider.package (e.g., cargo.bat apt.htop)
@@ -226,57 +226,86 @@ fn run_mode(mode: runner::Mode, config_path: Option<PathBuf>, configs: Vec<Strin
     runner.run(&config, &resolved_path)
 }
 
-fn run_remote(target: &str, cmd: &str, config_path: Option<PathBuf>, configs: &[String]) -> Result<()> {
-    use owo_colors::OwoColorize;
-    use std::fs;
+/// Pre-built archive and binary info for remote deployment
+struct RemotePayload {
+    local_tar: String,
+    bin_hash: String,
+    dek_binary: PathBuf,
+}
 
+impl RemotePayload {
+    fn prepare(config_path: &Path) -> Result<Self> {
+        let tar_data = util::create_tar_gz(config_path)?;
+        let hash = format!("{:x}", md5::compute(&tar_data));
+        let local_tar = format!("/tmp/dek-config-{}.tar.gz", &hash[..8]);
+        std::fs::write(&local_tar, &tar_data)?;
+
+        let dek_binary = std::env::current_exe()?;
+        let bin_data = std::fs::read(&dek_binary)?;
+        let bin_hash = format!("{:x}", md5::compute(&bin_data));
+
+        Ok(Self { local_tar, bin_hash, dek_binary })
+    }
+
+    fn cleanup(&self) {
+        let _ = std::fs::remove_file(&self.local_tar);
+    }
+}
+
+fn run_remote(target: &str, cmd: &str, config_path: Option<PathBuf>, configs: &[String]) -> Result<()> {
     let config_path = resolve_config(config_path)?;
-    let config_abs = fs::canonicalize(&config_path)?;
+    let config_abs = std::fs::canonicalize(&config_path)?;
 
     output::print_header(&format!("{} on {}", cmd, target));
     println!();
 
-    // Create tar.gz of config
-    println!("  {} Creating config archive...", "→".yellow());
-    let tar_data = util::create_tar_gz(&config_abs)?;
-    let hash = format!("{:x}", md5::compute(&tar_data));
-    let local_tar = format!("/tmp/dek-config-{}.tar.gz", &hash[..8]);
-    fs::write(&local_tar, &tar_data)?;
+    let payload = RemotePayload::prepare(&config_abs)?;
+    let result = deploy_to_host(target, cmd, configs, &payload);
+    payload.cleanup();
+    result
+}
 
-    // Get dek binary path
-    let dek_binary = std::env::current_exe()?;
+fn deploy_to_host(target: &str, cmd: &str, configs: &[String], payload: &RemotePayload) -> Result<()> {
+    use owo_colors::OwoColorize;
+
     let remote_dir = "/tmp/dek-remote";
     let remote_bin = format!("{}/dek", remote_dir);
     let remote_config = format!("{}/config.tar.gz", remote_dir);
 
-    // Create remote directory
-    println!("  {} Setting up remote...", "→".yellow());
-    let mkdir_status = Command::new("ssh")
-        .args([target, &format!("mkdir -p {}", remote_dir)])
-        .status()?;
-    if !mkdir_status.success() {
-        bail!("Failed to create remote directory");
+    // Setup remote dir + check if binary already exists with same hash
+    let check_cmd = format!(
+        "mkdir -p {} && if [ -f {} ]; then md5sum {} | cut -d' ' -f1; fi",
+        remote_dir, remote_bin, remote_bin
+    );
+    let check_output = Command::new("ssh")
+        .args([target, &check_cmd])
+        .output()?;
+    if !check_output.status.success() {
+        bail!("Failed to setup remote directory on {}", target);
     }
 
-    // Copy dek binary
-    println!("  {} Copying dek binary...", "→".yellow());
-    let scp_bin = Command::new("scp")
-        .args(["-q", &dek_binary.to_string_lossy(), &format!("{}:{}", target, remote_bin)])
-        .status()?;
-    if !scp_bin.success() {
-        bail!("Failed to copy dek binary to remote");
+    let remote_hash = String::from_utf8_lossy(&check_output.stdout).trim().to_string();
+
+    // Copy binary only if hash differs
+    if remote_hash != payload.bin_hash {
+        println!("  {} Copying dek binary to {}...", "→".yellow(), target);
+        let scp_bin = Command::new("scp")
+            .args(["-q", &payload.dek_binary.to_string_lossy(), &format!("{}:{}", target, remote_bin)])
+            .status()?;
+        if !scp_bin.success() {
+            bail!("Failed to copy dek binary to {}", target);
+        }
     }
 
     // Copy config
-    println!("  {} Copying config...", "→".yellow());
     let scp_config = Command::new("scp")
-        .args(["-q", &local_tar, &format!("{}:{}", target, remote_config)])
+        .args(["-q", &payload.local_tar, &format!("{}:{}", target, remote_config)])
         .status()?;
     if !scp_config.success() {
-        bail!("Failed to copy config to remote");
+        bail!("Failed to copy config to {}", target);
     }
 
-    // Build remote command
+    // Run dek on remote
     let config_arg = format!("-C {}", remote_config);
     let configs_arg = configs.join(" ");
     let remote_cmd = format!("{} {} {} {}", remote_bin, cmd, config_arg, configs_arg);
@@ -284,7 +313,6 @@ fn run_remote(target: &str, cmd: &str, config_path: Option<PathBuf>, configs: &[
     println!("  {} Running on {}...", "→".yellow(), target);
     println!();
 
-    // Run dek on remote
     let status = Command::new("ssh")
         .args(["-t", target, &remote_cmd])
         .stdin(Stdio::inherit())
@@ -292,11 +320,8 @@ fn run_remote(target: &str, cmd: &str, config_path: Option<PathBuf>, configs: &[
         .stderr(Stdio::inherit())
         .status()?;
 
-    // Cleanup local tar
-    let _ = fs::remove_file(&local_tar);
-
     if !status.success() {
-        bail!("Remote command failed");
+        bail!("Remote command failed on {}", target);
     }
 
     Ok(())
@@ -308,10 +333,10 @@ fn run_remotes(pattern: &str, cmd: &str, config_path: Option<PathBuf>, configs: 
     let config_path = resolve_config(config_path.clone())?;
     let config_abs = std::fs::canonicalize(&config_path)?;
     let inventory = config::load_inventory(&config_path)
-        .ok_or_else(|| anyhow::anyhow!("No inventory.toml found in config directory"))?;
+        .ok_or_else(|| anyhow::anyhow!("No inventory.ini found in config directory"))?;
 
     if inventory.hosts.is_empty() {
-        bail!("No hosts defined in inventory.toml");
+        bail!("No hosts defined in inventory");
     }
 
     // Match hosts against pattern (simple glob: * matches any chars)
@@ -380,27 +405,41 @@ fn run_remotes(pattern: &str, cmd: &str, config_path: Option<PathBuf>, configs: 
 
     // Prepare config with includes
     let prepared_config = prepare_config_with_includes(&config_abs, &dek_config)?;
+    let prepared_abs = std::fs::canonicalize(&prepared_config)?;
 
-    // Run on each host
-    let mut failed = Vec::new();
-    for host in &matched {
-        if let Err(e) = run_remote(host, cmd, Some(prepared_config.clone()), configs) {
-            eprintln!("{} {} failed: {}", "✗".red(), host, e);
-            failed.push(host.as_str());
-        }
-        println!();
-    }
+    // Create archive and compute binary hash once
+    println!("{} Preparing payload...", "::".blue());
+    let payload = RemotePayload::prepare(&prepared_abs)?;
+
+    // Deploy to all hosts in parallel
+    println!("{} Deploying to {} hosts...\n", "::".blue(), matched.len());
+
+    let results: Vec<_> = std::thread::scope(|s| {
+        let handles: Vec<_> = matched.iter().map(|host| {
+            let payload = &payload;
+            let configs = configs;
+            s.spawn(move || {
+                let result = deploy_to_host(host, cmd, configs, payload);
+                (host.as_str(), result)
+            })
+        }).collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+
+    payload.cleanup();
 
     // Summary
-    let succeeded = matched.len() - failed.len();
-    if failed.is_empty() {
-        println!("{} {}/{} hosts completed successfully", "✓".green(), succeeded, matched.len());
-    } else {
-        println!("{} {}/{} hosts completed successfully", "!".yellow(), succeeded, matched.len());
-    }
+    let failed: Vec<_> = results.iter().filter(|(_, r)| r.is_err()).collect();
+    let succeeded = results.len() - failed.len();
 
-    if !failed.is_empty() {
-        println!("Failed: {}", failed.join(", "));
+    println!();
+    if failed.is_empty() {
+        println!("{} {}/{} hosts completed successfully", "✓".green(), succeeded, results.len());
+    } else {
+        println!("{} {}/{} hosts completed, {} failed:", "!".yellow(), succeeded, results.len(), failed.len());
+        for (host, err) in &failed {
+            println!("  {} {}: {}", "✗".red(), host, err.as_ref().unwrap_err());
+        }
         bail!("{} host(s) failed", failed.len());
     }
 
@@ -525,6 +564,14 @@ fn run_list(config_path: Option<PathBuf>) -> Result<()> {
             println!("  {}", label.green());
         }
     }
+
+    // Show inventory info
+    if let Some(inv) = config::load_inventory(&path) {
+        if !inv.hosts.is_empty() {
+            println!("  {} - {}", "inventory".green(), format!("{} hosts", inv.hosts.len()).dimmed());
+        }
+    }
+
     Ok(())
 }
 

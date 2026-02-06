@@ -175,6 +175,7 @@ fn merge_config(base: &mut Config, other: Config) {
         if let Some(ensure_line) = file.ensure_line {
             base_file.ensure_line.get_or_insert_with(Default::default).extend(ensure_line);
         }
+        base_file.line.extend(file.line);
     }
 
     // Merge aliases
@@ -273,16 +274,45 @@ pub fn load_meta<P: AsRef<Path>>(config_path: P) -> Option<Meta> {
     Some(meta)
 }
 
-/// Load inventory.toml from config path
+/// Load inventory from config path
+/// Checks meta.toml for custom inventory path, falls back to inventory.ini in config dir
 pub fn load_inventory<P: AsRef<Path>>(config_path: P) -> Option<Inventory> {
     let path = config_path.as_ref();
     let dir = if path.is_dir() { path } else { path.parent()? };
-    let inventory_path = dir.join("inventory.toml");
+
+    // Check meta.toml for custom inventory path
+    let inventory_path = if let Some(meta) = load_meta(path) {
+        if let Some(ref custom) = meta.inventory {
+            let p = Path::new(custom);
+            if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                dir.join(custom)
+            }
+        } else {
+            dir.join("inventory.ini")
+        }
+    } else {
+        dir.join("inventory.ini")
+    };
 
     if !inventory_path.exists() {
         return None;
     }
 
     let content = fs::read_to_string(&inventory_path).ok()?;
-    toml::from_str(&content).ok()
+    Some(parse_inventory_ini(&content))
+}
+
+/// Parse ansible-style inventory.ini
+/// Ignores [group] headers, comments (;/#), and blank lines
+fn parse_inventory_ini(content: &str) -> Inventory {
+    let hosts: Vec<String> = content
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .filter(|l| !l.starts_with('[') && !l.starts_with(';') && !l.starts_with('#'))
+        .map(|l| l.to_string())
+        .collect();
+    Inventory { hosts }
 }
