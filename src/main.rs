@@ -33,6 +33,10 @@ struct Cli {
     #[arg(short = 'r', long, global = true, value_name = "PATTERN")]
     remotes: Option<String>,
 
+    /// Suppress banner and extra output
+    #[arg(short, long, global = true)]
+    quiet: bool,
+
     /// Inline install: provider.package (e.g., cargo.bat apt.htop)
     #[arg(value_name = "SPEC", trailing_var_arg = true)]
     inline: Vec<String>,
@@ -110,6 +114,7 @@ fn main() -> Result<()> {
     let config = cli.config;
     let target = cli.target;
     let remotes = cli.remotes;
+    let quiet = cli.quiet;
 
     match cli.command {
         Some(Commands::Apply { configs }) => {
@@ -118,7 +123,7 @@ fn main() -> Result<()> {
             } else if let Some(t) = target {
                 run_remote(&t, "apply", config.clone(), &configs)
             } else {
-                run_mode(runner::Mode::Apply, config, configs)
+                run_mode(runner::Mode::Apply, config, configs, quiet)
             }
         }
         Some(Commands::Check { configs }) => {
@@ -127,7 +132,7 @@ fn main() -> Result<()> {
             } else if let Some(t) = target {
                 run_remote(&t, "check", config.clone(), &configs)
             } else {
-                run_mode(runner::Mode::Check, config, configs)
+                run_mode(runner::Mode::Check, config, configs, quiet)
             }
         }
         Some(Commands::Plan { configs }) => {
@@ -136,7 +141,7 @@ fn main() -> Result<()> {
             } else if let Some(t) = target {
                 run_remote(&t, "plan", config.clone(), &configs)
             } else {
-                run_mode(runner::Mode::Plan, config, configs)
+                run_mode(runner::Mode::Plan, config, configs, quiet)
             }
         }
         Some(Commands::List) => {
@@ -188,7 +193,7 @@ fn resolve_config(config: Option<PathBuf>) -> Result<PathBuf> {
     }
 }
 
-fn run_mode(mode: runner::Mode, config_path: Option<PathBuf>, configs: Vec<String>) -> Result<()> {
+fn run_mode(mode: runner::Mode, config_path: Option<PathBuf>, configs: Vec<String>, quiet: bool) -> Result<()> {
     let path = resolve_config(config_path)?;
     let resolved_path = config::resolve_path(&path)?;
     let meta = config::load_meta(&resolved_path);
@@ -199,22 +204,24 @@ fn run_mode(mode: runner::Mode, config_path: Option<PathBuf>, configs: Vec<Strin
         runner::Mode::Plan => "Plan for",
     };
 
-    if let Some(banner) = meta.as_ref().and_then(|m| m.banner.as_ref()) {
-        for line in banner.lines() {
-            println!("{}", line.bold());
-        }
-    } else {
-        let header = if configs.is_empty() {
-            format!("{} {}", verb, path.display())
+    if !quiet {
+        if let Some(banner) = meta.as_ref().and_then(|m| m.banner.as_ref()) {
+            for line in banner.lines() {
+                println!("{}", line.bold());
+            }
         } else {
-            format!("{} [{}]", verb, configs.join(", "))
-        };
-        output::print_header(&header);
+            let header = if configs.is_empty() {
+                format!("{} {}", verb, path.display())
+            } else {
+                format!("{} [{}]", verb, configs.join(", "))
+            };
+            output::print_header(&header);
+        }
+        if let Some(info) = bake::get_bake_info() {
+            println!("{}", info.dimmed());
+        }
+        println!();
     }
-    if let Some(info) = bake::get_bake_info() {
-        println!("{}", info.dimmed());
-    }
-    println!();
 
     let config = if configs.is_empty() {
         config::load(&resolved_path)?
@@ -234,7 +241,7 @@ struct RemotePayload {
 }
 
 impl RemotePayload {
-    fn prepare(config_path: &Path) -> Result<Self> {
+    fn prepare(config_path: &std::path::Path) -> Result<Self> {
         let tar_data = util::create_tar_gz(config_path)?;
         let hash = format!("{:x}", md5::compute(&tar_data));
         let local_tar = format!("/tmp/dek-config-{}.tar.gz", &hash[..8]);
@@ -253,6 +260,8 @@ impl RemotePayload {
 }
 
 fn run_remote(target: &str, cmd: &str, config_path: Option<PathBuf>, configs: &[String]) -> Result<()> {
+    use owo_colors::OwoColorize;
+
     let config_path = resolve_config(config_path)?;
     let config_abs = std::fs::canonicalize(&config_path)?;
 
@@ -260,17 +269,32 @@ fn run_remote(target: &str, cmd: &str, config_path: Option<PathBuf>, configs: &[
     println!();
 
     let payload = RemotePayload::prepare(&config_abs)?;
-    let result = deploy_to_host(target, cmd, configs, &payload);
+    let result = deploy_to_host(target, cmd, configs, &payload)?;
     payload.cleanup();
-    result
+
+    for line in result.output.lines() {
+        println!("  {}", line);
+    }
+
+    if !result.success {
+        bail!("Remote command failed on {}", target);
+    }
+
+    Ok(())
 }
 
-fn deploy_to_host(target: &str, cmd: &str, configs: &[String], payload: &RemotePayload) -> Result<()> {
-    use owo_colors::OwoColorize;
+/// Result of deploying to a single host
+struct DeployResult {
+    host: String,
+    output: String,
+    success: bool,
+}
 
+fn deploy_to_host(target: &str, cmd: &str, configs: &[String], payload: &RemotePayload) -> Result<DeployResult> {
     let remote_dir = "/tmp/dek-remote";
     let remote_bin = format!("{}/dek", remote_dir);
     let remote_config = format!("{}/config.tar.gz", remote_dir);
+    let mut log = String::new();
 
     // Setup remote dir + check if binary already exists with same hash
     let check_cmd = format!(
@@ -281,20 +305,22 @@ fn deploy_to_host(target: &str, cmd: &str, configs: &[String], payload: &RemoteP
         .args([target, &check_cmd])
         .output()?;
     if !check_output.status.success() {
-        bail!("Failed to setup remote directory on {}", target);
+        bail!("Failed to connect to {}", target);
     }
 
     let remote_hash = String::from_utf8_lossy(&check_output.stdout).trim().to_string();
 
     // Copy binary only if hash differs
     if remote_hash != payload.bin_hash {
-        println!("  {} Copying dek binary to {}...", "→".yellow(), target);
+        log.push_str("  binary: updated\n");
         let scp_bin = Command::new("scp")
             .args(["-q", &payload.dek_binary.to_string_lossy(), &format!("{}:{}", target, remote_bin)])
             .status()?;
         if !scp_bin.success() {
             bail!("Failed to copy dek binary to {}", target);
         }
+    } else {
+        log.push_str("  binary: cached\n");
     }
 
     // Copy config
@@ -308,23 +334,24 @@ fn deploy_to_host(target: &str, cmd: &str, configs: &[String], payload: &RemoteP
     // Run dek on remote
     let config_arg = format!("-C {}", remote_config);
     let configs_arg = configs.join(" ");
-    let remote_cmd = format!("{} {} {} {}", remote_bin, cmd, config_arg, configs_arg);
+    let remote_cmd = format!("{} -q {} {} {}", remote_bin, cmd, config_arg, configs_arg);
 
-    println!("  {} Running on {}...", "→".yellow(), target);
-    println!();
+    let output = Command::new("ssh")
+        .args([target, &remote_cmd])
+        .output()?;
 
-    let status = Command::new("ssh")
-        .args(["-t", target, &remote_cmd])
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()?;
-
-    if !status.success() {
-        bail!("Remote command failed on {}", target);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    log.push_str(&stdout);
+    if !stderr.is_empty() {
+        log.push_str(&stderr);
     }
 
-    Ok(())
+    Ok(DeployResult {
+        host: target.to_string(),
+        output: log,
+        success: output.status.success(),
+    })
 }
 
 fn run_remotes(pattern: &str, cmd: &str, config_path: Option<PathBuf>, configs: &[String]) -> Result<()> {
@@ -412,36 +439,67 @@ fn run_remotes(pattern: &str, cmd: &str, config_path: Option<PathBuf>, configs: 
     let payload = RemotePayload::prepare(&prepared_abs)?;
 
     // Deploy to all hosts in parallel
-    println!("{} Deploying to {} hosts...\n", "::".blue(), matched.len());
+    let total = matched.len();
+    println!("{} Deploying to {} hosts...\n", "::".blue(), total);
+    let start = std::time::Instant::now();
 
-    let results: Vec<_> = std::thread::scope(|s| {
-        let handles: Vec<_> = matched.iter().map(|host| {
+    let (tx, rx) = std::sync::mpsc::channel::<Result<DeployResult>>();
+
+    std::thread::scope(|s| {
+        for host in &matched {
+            let tx = tx.clone();
             let payload = &payload;
             let configs = configs;
             s.spawn(move || {
                 let result = deploy_to_host(host, cmd, configs, payload);
-                (host.as_str(), result)
-            })
-        }).collect();
-        handles.into_iter().map(|h| h.join().unwrap()).collect()
+                let _ = tx.send(result);
+            });
+        }
+        drop(tx);
+
+        // Print results as they arrive
+        let mut done = 0;
+        let mut failed_hosts: Vec<String> = Vec::new();
+        for result in rx {
+            done += 1;
+            match result {
+                Ok(r) => {
+                    let icon = if r.success { "✓".green().to_string() } else { "✗".red().to_string() };
+                    println!("{} {} ({}/{})", icon, r.host.bold(), done, total);
+                    for line in r.output.lines() {
+                        println!("  {}", line);
+                    }
+                    if !r.success {
+                        failed_hosts.push(r.host);
+                    }
+                }
+                Err(e) => {
+                    println!("{} error: {} ({}/{})", "✗".red(), e, done, total);
+                    failed_hosts.push("?".into());
+                }
+            }
+        }
+
+        // Summary
+        let elapsed = start.elapsed();
+        let timing = format!("({:.1}s)", elapsed.as_secs_f64());
+        let succeeded = total - failed_hosts.len();
+        println!();
+        if failed_hosts.is_empty() {
+            println!("{} {}/{} hosts completed {}", "✓".green(), succeeded, total, timing.dimmed());
+        } else {
+            println!("{} {}/{} hosts completed, {} failed {}", "!".yellow(), succeeded, total, failed_hosts.len(), timing.dimmed());
+            for h in &failed_hosts {
+                println!("  {} {}", "✗".red(), h);
+            }
+        }
+
+        if !failed_hosts.is_empty() {
+            std::process::exit(1);
+        }
     });
 
     payload.cleanup();
-
-    // Summary
-    let failed: Vec<_> = results.iter().filter(|(_, r)| r.is_err()).collect();
-    let succeeded = results.len() - failed.len();
-
-    println!();
-    if failed.is_empty() {
-        println!("{} {}/{} hosts completed successfully", "✓".green(), succeeded, results.len());
-    } else {
-        println!("{} {}/{} hosts completed, {} failed:", "!".yellow(), succeeded, results.len(), failed.len());
-        for (host, err) in &failed {
-            println!("  {} {}: {}", "✗".red(), host, err.as_ref().unwrap_err());
-        }
-        bail!("{} host(s) failed", failed.len());
-    }
 
     Ok(())
 }
