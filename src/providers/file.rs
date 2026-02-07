@@ -261,10 +261,11 @@ impl Provider for FileLineProvider {
     fn apply(&self, state: &StateItem) -> Result<()> {
         let file_path = expand_path(&state.key);
         let value = state.value.as_deref().unwrap_or("");
-        let parts: Vec<&str> = value.splitn(3, '\x01').collect();
+        let parts: Vec<&str> = value.splitn(4, '\x01').collect();
         let line = parts[0];
         let original = parts.get(1).filter(|s| !s.is_empty()).copied();
         let mode = parts.get(2).copied().unwrap_or("replace");
+        let match_type = parts.get(3).copied().unwrap_or("literal");
 
         if let Some(parent) = file_path.parent() {
             fs::create_dir_all(parent)
@@ -283,15 +284,27 @@ impl Provider for FileLineProvider {
         }
 
         if let Some(pattern) = original {
-            let re = regex::Regex::new(pattern)
-                .map_err(|e| anyhow::anyhow!("Invalid original regex '{}': {}", pattern, e))?;
-
             let file_lines: Vec<&str> = content.lines().collect();
             let mut new_lines: Vec<String> = Vec::with_capacity(file_lines.len() + 1);
             let mut found = false;
 
+            // Build matcher based on type
+            let is_regex = match_type == "regex";
+            let re = if is_regex {
+                Some(regex::Regex::new(pattern)
+                    .map_err(|e| anyhow::anyhow!("Invalid original_regex '{}': {}", pattern, e))?)
+            } else {
+                None
+            };
+
             for file_line in &file_lines {
-                if !found && re.is_match(file_line) {
+                let matches = if let Some(ref re) = re {
+                    re.is_match(file_line)
+                } else {
+                    file_line.trim() == pattern.trim()
+                };
+
+                if !found && matches {
                     found = true;
                     match mode {
                         "below" => {

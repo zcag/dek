@@ -277,6 +277,7 @@ impl ProviderRegistry {
             Box::new(package::WebiProvider),
             Box::new(package::NpmProvider),
             Box::new(package::PipProvider),
+            Box::new(package::PipxProvider),
             Box::new(service::SystemdProvider),
             Box::new(file::CopyProvider),
             Box::new(file::SymlinkProvider),

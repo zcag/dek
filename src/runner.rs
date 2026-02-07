@@ -198,6 +198,11 @@ fn collect_state_items(config: &Config, base_dir: &Path) -> Vec<StateItem> {
                 items.push(StateItem::new("package.pip", item));
             }
         }
+        if let Some(ref pipx) = pkg.pipx {
+            for item in &pipx.items {
+                items.push(StateItem::new("package.pipx", item));
+            }
+        }
         if let Some(ref webi) = pkg.webi {
             for item in &webi.items {
                 items.push(StateItem::new("package.webi", item));
@@ -237,8 +242,13 @@ fn collect_state_items(config: &Config, base_dir: &Path) -> Vec<StateItem> {
                 FileLineMode::Replace => "replace",
                 FileLineMode::Below => "below",
             };
-            let original = entry.original.as_deref().unwrap_or("");
-            let value = format!("{}\x01{}\x01{}", entry.line, original, mode);
+            // Encode: line\x01original\x01mode\x01match_type
+            let (original, match_type) = if let Some(ref re) = entry.original_regex {
+                (re.as_str(), "regex")
+            } else {
+                (entry.original.as_deref().unwrap_or(""), "literal")
+            };
+            let value = format!("{}\x01{}\x01{}\x01{}", entry.line, original, mode, match_type);
             items.push(StateItem::new("file.line", &entry.path).with_value(value));
         }
     }

@@ -65,6 +65,7 @@ pub struct PackageConfig {
     pub go: Option<PackageList>,
     pub npm: Option<PackageList>,
     pub pip: Option<PackageList>,
+    pub pipx: Option<PackageList>,
     pub webi: Option<PackageList>,
 }
 
@@ -102,8 +103,10 @@ pub struct FileConfig {
 pub struct FileLineConfig {
     pub path: String,
     pub line: String,
-    /// Regex pattern to match an existing line
+    /// Literal string to match an existing line
     pub original: Option<String>,
+    /// Regex pattern to match an existing line
+    pub original_regex: Option<String>,
     /// "replace" (default) or "below"
     #[serde(default)]
     pub mode: FileLineMode,

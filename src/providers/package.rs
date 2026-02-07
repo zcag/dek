@@ -344,3 +344,39 @@ impl Provider for PipProvider {
         Ok(())
     }
 }
+
+// =============================================================================
+// PIPX
+// =============================================================================
+
+pub struct PipxProvider;
+
+impl Provider for PipxProvider {
+    fn name(&self) -> &'static str {
+        "package.pipx"
+    }
+
+    fn requires(&self) -> Vec<Requirement> {
+        vec![Requirement::binary("pipx", InstallMethod::Pip("pipx"))]
+    }
+
+    fn check(&self, state: &StateItem) -> Result<CheckResult> {
+        let (_, bin_name) = crate::util::parse_spec(&state.key);
+        if command_exists(&bin_name) {
+            Ok(CheckResult::Satisfied)
+        } else {
+            Ok(CheckResult::Missing {
+                detail: format!("'{}' not in PATH", bin_name),
+            })
+        }
+    }
+
+    fn apply(&self, state: &StateItem) -> Result<()> {
+        let (pkg_name, _) = crate::util::parse_spec(&state.key);
+        let output = run_cmd("pipx", &["install", &pkg_name])?;
+        if !output.status.success() {
+            bail!("pipx install failed: {}", String::from_utf8_lossy(&output.stderr));
+        }
+        Ok(())
+    }
+}

@@ -157,6 +157,7 @@ fn merge_config(base: &mut Config, other: Config) {
         merge_package_list(&mut base_pkg.go, pkg.go);
         merge_package_list(&mut base_pkg.npm, pkg.npm);
         merge_package_list(&mut base_pkg.pip, pkg.pip);
+        merge_package_list(&mut base_pkg.pipx, pkg.pipx);
         merge_package_list(&mut base_pkg.webi, pkg.webi);
     }
 
