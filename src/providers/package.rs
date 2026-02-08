@@ -1,5 +1,5 @@
 use super::{CheckResult, InstallMethod, Provider, Requirement, StateItem};
-use crate::util::{command_exists, run_cmd, run_cmd_live, run_cmd_ok, run_sudo, run_sudo_live, SysPkgManager};
+use crate::util::{command_exists, install_with_yay_live, run_cmd, run_cmd_live, run_cmd_ok, run_sudo, run_sudo_live, SysPkgManager};
 use anyhow::{bail, Result};
 use indicatif::ProgressBar;
 
@@ -57,7 +57,7 @@ impl Provider for OsProvider {
             SysPkgManager::Pacman => {
                 let out = run_sudo_live("pacman", &["-S", "--noconfirm", &pkg_name], pb)?;
                 if !out.status.success() {
-                    return crate::util::install_with_yay(&pkg_name);
+                    return install_with_yay_live(&pkg_name, pb);
                 }
                 return Ok(());
             }
@@ -151,7 +151,7 @@ impl Provider for PacmanProvider {
         let (pkg_name, _) = crate::util::parse_spec(&state.key);
         let output = run_sudo_live("pacman", &["-S", "--noconfirm", &pkg_name], pb)?;
         if !output.status.success() {
-            return crate::util::install_with_yay(&pkg_name);
+            return install_with_yay_live(&pkg_name, pb);
         }
         Ok(())
     }

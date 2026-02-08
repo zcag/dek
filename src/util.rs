@@ -104,11 +104,18 @@ pub fn run_cmd_live(cmd: &str, args: &[&str], pb: &ProgressBar) -> Result<Output
     })
 }
 
-/// Run a command with sudo and piped output, updating a spinner with each line
+/// Run a command with sudo and piped output, updating a spinner with each line.
+/// Suspends the spinner to let sudo prompt for a password if needed.
 pub fn run_sudo_live(cmd: &str, args: &[&str], pb: &ProgressBar) -> Result<Output> {
     if unsafe { libc::geteuid() } == 0 {
         return run_cmd_live(cmd, args, pb);
     }
+    // Pre-authenticate: suspend spinner so the tty password prompt is visible
+    let auth = pb.suspend(|| {
+        Command::new("sudo").arg("-v").status()
+    });
+    auth.context("Failed to authenticate sudo")?;
+
     let mut sudo_args = vec![cmd];
     sudo_args.extend(args);
     run_cmd_live("sudo", &sudo_args, pb)
@@ -220,6 +227,22 @@ pub fn install_with_yay(pkg: &str) -> Result<()> {
         install_yay()?;
     }
     let output = run_cmd("yay", &["-S", "--noconfirm", pkg])?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "Failed to install '{}' via yay: {}",
+            pkg,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(())
+}
+
+/// Install a package via yay with live progress
+pub fn install_with_yay_live(pkg: &str, pb: &ProgressBar) -> Result<()> {
+    if !command_exists("yay") {
+        install_yay()?;
+    }
+    let output = run_cmd_live("yay", &["-S", "--noconfirm", pkg], pb)?;
     if !output.status.success() {
         anyhow::bail!(
             "Failed to install '{}' via yay: {}",

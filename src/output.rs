@@ -49,15 +49,6 @@ pub fn print_plan_item(item: &StateItem) {
     );
 }
 
-pub fn print_apply_start(item: &StateItem) {
-    println!(
-        "  {} {} {}",
-        "→".yellow(),
-        item.kind.dimmed(),
-        item.key.white()
-    );
-}
-
 pub fn print_apply_done(item: &StateItem) {
     println!(
         "  {} {} {}",
