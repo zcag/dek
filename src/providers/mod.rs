@@ -120,7 +120,7 @@ impl Requirement {
         }
 
         use owo_colors::OwoColorize;
-        println!("    {} installing {}...", "→".yellow(), self.binary);
+        println!("    {} installing {}...", c!("→", yellow), self.binary);
 
         match &self.install {
             InstallMethod::Rustup => {
