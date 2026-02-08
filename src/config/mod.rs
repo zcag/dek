@@ -238,6 +238,7 @@ pub fn resolve_path<P: AsRef<Path>>(path: P) -> Result<PathBuf> {
 }
 
 pub fn find_default_config() -> Option<std::path::PathBuf> {
+    // Current directory: dek.toml or dek/
     let file = Path::new("dek.toml");
     if file.exists() {
         return Some(file.to_path_buf());
@@ -246,6 +247,20 @@ pub fn find_default_config() -> Option<std::path::PathBuf> {
     let dir = Path::new("dek");
     if dir.is_dir() {
         return Some(dir.to_path_buf());
+    }
+
+    // User config: $XDG_CONFIG_HOME/dek or ~/.config/dek
+    let config_home = std::env::var("XDG_CONFIG_HOME")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".config")));
+
+    if let Some(config_dir) = config_home {
+        let global = config_dir.join("dek");
+        if global.is_dir() {
+            return Some(global);
+        }
     }
 
     None
