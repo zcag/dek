@@ -135,14 +135,17 @@ impl Provider for CargoProvider {
     }
 
     fn check(&self, state: &StateItem) -> Result<CheckResult> {
-        let (_, bin_name) = crate::util::parse_spec(&state.key);
-        if command_exists(&bin_name) {
-            Ok(CheckResult::Satisfied)
-        } else {
-            Ok(CheckResult::Missing {
-                detail: format!("'{}' not in PATH", bin_name),
-            })
+        let (pkg_name, _) = crate::util::parse_spec(&state.key);
+        // cargo install --list outputs "pkg_name vX.Y.Z:" for installed crates
+        if let Ok(output) = run_cmd("cargo", &["install", "--list"]) {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if stdout.lines().any(|l| l.starts_with(&format!("{} ", pkg_name))) {
+                return Ok(CheckResult::Satisfied);
+            }
         }
+        Ok(CheckResult::Missing {
+            detail: format!("cargo package '{}' not installed", pkg_name),
+        })
     }
 
     fn apply(&self, state: &StateItem) -> Result<()> {
@@ -362,14 +365,19 @@ impl Provider for PipxProvider {
     }
 
     fn check(&self, state: &StateItem) -> Result<CheckResult> {
-        let (_, bin_name) = crate::util::parse_spec(&state.key);
-        if command_exists(&bin_name) {
-            Ok(CheckResult::Satisfied)
-        } else {
-            Ok(CheckResult::Missing {
-                detail: format!("'{}' not in PATH", bin_name),
-            })
+        let (pkg_name, _) = crate::util::parse_spec(&state.key);
+        // pipx list --short outputs "package_name 1.2.3" per line
+        if let Ok(output) = run_cmd("pipx", &["list", "--short"]) {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if stdout.lines().any(|l| {
+                l.split_whitespace().next().map(|name| name == pkg_name).unwrap_or(false)
+            }) {
+                return Ok(CheckResult::Satisfied);
+            }
         }
+        Ok(CheckResult::Missing {
+            detail: format!("pipx package '{}' not installed", pkg_name),
+        })
     }
 
     fn apply(&self, state: &StateItem) -> Result<()> {
