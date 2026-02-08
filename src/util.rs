@@ -250,7 +250,7 @@ pub fn install_with_yay_live(pkg: &str, pb: &ProgressBar) -> Result<()> {
 /// Install yay from AUR
 fn install_yay() -> Result<()> {
     use owo_colors::OwoColorize;
-    println!("    {} installing yay...", "→".yellow());
+    println!("    {} installing yay...", c!("→", yellow));
 
     // Ensure base-devel and git
     let _ = run_sudo("pacman", &["-S", "--needed", "--noconfirm", "git", "base-devel"]);

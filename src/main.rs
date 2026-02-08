@@ -1,3 +1,11 @@
+/// Conditional color: uses if_supports_color to respect NO_COLOR / --no-color
+#[macro_export]
+macro_rules! c {
+    ($text:expr, $method:ident) => {
+        $text.if_supports_color(owo_colors::Stream::Stdout, |t| t.$method())
+    };
+}
+
 mod bake;
 mod config;
 mod output;
@@ -6,9 +14,16 @@ mod runner;
 mod util;
 
 use anyhow::{bail, Result};
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use owo_colors::OwoColorize;
 use clap_complete::{generate, Shell};
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ColorMode {
+    Auto,
+    Always,
+    Never,
+}
 use std::io;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -36,6 +51,10 @@ struct Cli {
     /// Suppress banner and extra output
     #[arg(short, long, global = true)]
     quiet: bool,
+
+    /// Color output: auto (default), always, never
+    #[arg(long, global = true, default_value = "auto")]
+    color: ColorMode,
 
     /// Inline install: provider.package (e.g., cargo.bat apt.htop)
     #[arg(value_name = "SPEC", trailing_var_arg = true)]
@@ -105,6 +124,22 @@ enum Commands {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    match cli.color {
+        ColorMode::Always => {
+            owo_colors::set_override(true);
+            std::env::remove_var("NO_COLOR");
+        }
+        ColorMode::Never => {
+            owo_colors::set_override(false);
+            std::env::set_var("NO_COLOR", "1");
+        }
+        ColorMode::Auto => {
+            if std::env::var_os("NO_COLOR").is_some() {
+                owo_colors::set_override(false);
+            }
+        }
+    }
 
     // Handle inline mode: dek cargo.bat apt.htop
     // If first arg has no dot, treat as: dek run <name> [args...]
@@ -213,7 +248,7 @@ fn run_mode(mode: runner::Mode, config_path: Option<PathBuf>, configs: Vec<Strin
     if !quiet {
         if let Some(banner) = meta.as_ref().and_then(|m| m.banner.as_ref()) {
             for line in banner.lines() {
-                println!("{}", line.bold());
+                println!("{}", c!(line, bold));
             }
         } else {
             let header = if configs.is_empty() {
@@ -224,7 +259,7 @@ fn run_mode(mode: runner::Mode, config_path: Option<PathBuf>, configs: Vec<Strin
             output::print_header(&header);
         }
         if let Some(info) = bake::get_bake_info() {
-            println!("{}", info.dimmed());
+            println!("{}", c!(info, dimmed));
         }
         println!();
     }
@@ -266,8 +301,6 @@ impl RemotePayload {
 }
 
 fn run_remote(target: &str, cmd: &str, config_path: Option<PathBuf>, configs: &[String]) -> Result<()> {
-    use owo_colors::OwoColorize;
-
     let config_path = resolve_config(config_path)?;
     let config_abs = std::fs::canonicalize(&config_path)?;
 
@@ -394,13 +427,13 @@ fn run_remotes(pattern: &str, cmd: &str, config_path: Option<PathBuf>, configs: 
         .unwrap_or_default();
 
     // Show plan
-    println!("{} {} on {} host(s):", "::".blue(), cmd, matched.len());
+    println!("{} {} on {} host(s):", c!("::", blue), cmd, matched.len());
     for host in &matched {
         println!("  {}", host);
     }
     if !local_cmds.is_empty() {
         println!();
-        println!("{} Local commands to run first:", "::".blue());
+        println!("{} Local commands to run first:", c!("::", blue));
         for (name, _) in &local_cmds {
             println!("  {}", name);
         }
@@ -408,7 +441,7 @@ fn run_remotes(pattern: &str, cmd: &str, config_path: Option<PathBuf>, configs: 
     if let Some(ref includes) = dek_config.include {
         if !includes.is_empty() {
             println!();
-            println!("{} Files to include:", "::".blue());
+            println!("{} Files to include:", c!("::", blue));
             for (src, dst) in includes {
                 println!("  {} → {}", src, dst);
             }
@@ -428,9 +461,9 @@ fn run_remotes(pattern: &str, cmd: &str, config_path: Option<PathBuf>, configs: 
 
     // Run local commands first
     if !local_cmds.is_empty() {
-        println!("{} Running local commands...", "::".blue());
+        println!("{} Running local commands...", c!("::", blue));
         for (name, run_cfg) in &local_cmds {
-            println!("  {} {}", "→".yellow(), name);
+            println!("  {} {}", c!("→", yellow), name);
             run_local_command(name, run_cfg, &config_abs)?;
         }
         println!();
@@ -441,12 +474,12 @@ fn run_remotes(pattern: &str, cmd: &str, config_path: Option<PathBuf>, configs: 
     let prepared_abs = std::fs::canonicalize(&prepared_config)?;
 
     // Create archive and compute binary hash once
-    println!("{} Preparing payload...", "::".blue());
+    println!("{} Preparing payload...", c!("::", blue));
     let payload = RemotePayload::prepare(&prepared_abs)?;
 
     // Deploy to all hosts in parallel
     let total = matched.len();
-    println!("{} Deploying to {} hosts...\n", "::".blue(), total);
+    println!("{} Deploying to {} hosts...\n", c!("::", blue), total);
     let start = std::time::Instant::now();
 
     let (tx, rx) = std::sync::mpsc::channel::<Result<DeployResult>>();
@@ -470,8 +503,8 @@ fn run_remotes(pattern: &str, cmd: &str, config_path: Option<PathBuf>, configs: 
             done += 1;
             match result {
                 Ok(r) => {
-                    let icon = if r.success { "✓".green().to_string() } else { "✗".red().to_string() };
-                    println!("{} {} ({}/{})", icon, r.host.bold(), done, total);
+                    let icon = if r.success { format!("{}", c!("✓", green)) } else { format!("{}", c!("✗", red)) };
+                    println!("{} {} ({}/{})", icon, c!(r.host, bold), done, total);
                     for line in r.output.lines() {
                         println!("  {}", line);
                     }
@@ -480,7 +513,7 @@ fn run_remotes(pattern: &str, cmd: &str, config_path: Option<PathBuf>, configs: 
                     }
                 }
                 Err(e) => {
-                    println!("{} error: {} ({}/{})", "✗".red(), e, done, total);
+                    println!("{} error: {} ({}/{})", c!("✗", red), e, done, total);
                     failed_hosts.push("?".into());
                 }
             }
@@ -492,11 +525,11 @@ fn run_remotes(pattern: &str, cmd: &str, config_path: Option<PathBuf>, configs: 
         let succeeded = total - failed_hosts.len();
         println!();
         if failed_hosts.is_empty() {
-            println!("{} {}/{} hosts completed {}", "✓".green(), succeeded, total, timing.dimmed());
+            println!("{} {}/{} hosts completed {}", c!("✓", green), succeeded, total, c!(timing, dimmed));
         } else {
-            println!("{} {}/{} hosts completed, {} failed {}", "!".yellow(), succeeded, total, failed_hosts.len(), timing.dimmed());
+            println!("{} {}/{} hosts completed, {} failed {}", c!("!", yellow), succeeded, total, failed_hosts.len(), c!(timing, dimmed));
             for h in &failed_hosts {
-                println!("  {} {}", "✗".red(), h);
+                println!("  {} {}", c!("✗", red), h);
             }
         }
 
@@ -635,7 +668,7 @@ fn run_list(config_path: Option<PathBuf>) -> Result<()> {
     // Show inventory info
     if let Some(inv) = config::load_inventory(&path) {
         if !inv.hosts.is_empty() {
-            println!("  {} - {}", "inventory".green(), format!("{} hosts", inv.hosts.len()).dimmed());
+            println!("  {} - {}", c!("inventory", green), c!(format!("{} hosts", inv.hosts.len()), dimmed));
         }
     }
 
@@ -660,11 +693,11 @@ fn print_config_entry(cfg: &config::ConfigInfo) {
         } else {
             format!("{} (skipped)", desc)
         };
-        println!("  {} - {}", label.dimmed(), suffix.dimmed());
+        println!("  {} - {}", c!(label, dimmed), c!(suffix, dimmed));
     } else if let Some(ref d) = cfg.description {
-        println!("  {} - {}", label.green(), d.dimmed());
+        println!("  {} - {}", c!(label, green), c!(d, dimmed));
     } else {
-        println!("  {}", label.green());
+        println!("  {}", c!(label, green));
     }
 }
 
@@ -691,9 +724,9 @@ fn run_command(config_path: Option<PathBuf>, name: Option<String>, args: Vec<Str
             cmds.sort_by_key(|(k, _)| *k);
             for (cmd_name, cmd_config) in cmds {
                 if let Some(ref desc) = cmd_config.description {
-                    println!("  {} - {}", cmd_name.bold(), desc.dimmed());
+                    println!("  {} - {}", c!(cmd_name, bold), c!(desc, dimmed));
                 } else {
-                    println!("  {}", cmd_name.bold());
+                    println!("  {}", c!(cmd_name, bold));
                 }
             }
             return Ok(());
@@ -802,8 +835,6 @@ fn run_inline(specs: &[String]) -> Result<()> {
 }
 
 fn run_test(config_path: Option<PathBuf>, image: String, keep: bool) -> Result<()> {
-    use owo_colors::OwoColorize;
-
     // Check docker is available
     if which::which("docker").is_err() {
         bail!("docker not found in PATH");
@@ -818,7 +849,7 @@ fn run_test(config_path: Option<PathBuf>, image: String, keep: bool) -> Result<(
 
     // Get dek binary - use current exe if baked, otherwise build from source
     let dek_binary = if cwd.join("Cargo.toml").exists() {
-        println!("  {} Building dek...", "→".yellow());
+        println!("  {} Building dek...", c!("→", yellow));
         let build_status = Command::new("cargo")
             .args(["build", "--release", "--quiet"])
             .status()?;
@@ -885,7 +916,7 @@ fn run_test(config_path: Option<PathBuf>, image: String, keep: bool) -> Result<(
         config_in_container
     ));
 
-    println!("  {} Starting container...", "→".yellow());
+    println!("  {} Starting container...", c!("→", yellow));
     println!();
 
     // Run docker
@@ -911,14 +942,13 @@ fn run_test(config_path: Option<PathBuf>, image: String, keep: bool) -> Result<(
 }
 
 fn run_setup() -> Result<()> {
-    use owo_colors::OwoColorize;
     use std::fs;
 
     output::print_header("Setting up dek");
     println!();
 
     let shell = util::Shell::detect();
-    println!("  {} Detected shell: {}", "•".blue(), shell.name());
+    println!("  {} Detected shell: {}", c!("•", blue), shell.name());
 
     // Generate completions
     let mut completions = Vec::new();
@@ -954,7 +984,7 @@ fn run_setup() -> Result<()> {
     };
 
     fs::write(&comp_path, &completions_str)?;
-    println!("  {} Wrote completions to {}", "✓".green(), comp_path);
+    println!("  {} Wrote completions to {}", c!("✓", green), comp_path);
 
     // Ensure source line in rc if needed (for zsh)
     if let Some(line) = source_line {
@@ -969,14 +999,14 @@ fn run_setup() -> Result<()> {
             new_content.push_str(line);
             new_content.push('\n');
             fs::write(&rc_path, &new_content)?;
-            println!("  {} Added completions to .zshrc", "✓".green());
+            println!("  {} Added completions to .zshrc", c!("✓", green));
         } else {
-            println!("  {} Completions already configured in .zshrc", "•".dimmed());
+            println!("  {} Completions already configured in .zshrc", c!("•", dimmed));
         }
     }
 
     println!();
-    println!("  {} Restart your shell or run: exec {}", "✓".green(), shell.name());
+    println!("  {} Restart your shell or run: exec {}", c!("✓", green), shell.name());
 
     Ok(())
 }
@@ -995,54 +1025,54 @@ fn print_rich_help(meta: Option<&config::Meta>, config_path: &PathBuf) -> Result
     if let Some(banner) = meta.and_then(|m| m.banner.as_ref()) {
         println!();
         for line in banner.lines() {
-            println!("  {}", line.bold());
+            println!("  {}", c!(line, bold));
         }
     } else {
         println!();
-        println!("  {}", name.bold());
+        println!("  {}", c!(name, bold));
     }
     let desc = meta.and_then(|m| m.description.as_ref());
     let version = meta.and_then(|m| m.version.as_ref());
     match (desc, version) {
-        (Some(d), Some(v)) => println!("  {} {}", d.dimmed(), format!("v{}", v).dimmed()),
-        (Some(d), None) => println!("  {}", d.dimmed()),
-        (None, Some(v)) => println!("  {}", format!("v{}", v).dimmed()),
+        (Some(d), Some(v)) => println!("  {} {}", c!(d, dimmed), c!(format!("v{}", v), dimmed)),
+        (Some(d), None) => println!("  {}", c!(d, dimmed)),
+        (None, Some(v)) => println!("  {}", c!(format!("v{}", v), dimmed)),
         (None, None) => {}
     }
     if let Some(info) = bake::get_bake_info() {
-        println!("  {}", "Powered by dek (https://github.com/zcag/dek)".dimmed());
-        println!("  {}", info.dimmed());
+        println!("  {}", c!("Powered by dek (https://github.com/zcag/dek)", dimmed));
+        println!("  {}", c!(info, dimmed));
     }
     println!();
 
     // Usage
-    println!("  {}", "USAGE".dimmed());
-    println!("    {} {} {}", exe_name.cyan(), "[OPTIONS]".dimmed(), "<COMMAND>".white());
+    println!("  {}", c!("USAGE", dimmed));
+    println!("    {} {} {}", c!(exe_name, cyan), c!("[OPTIONS]", dimmed), c!("<COMMAND>", white));
     println!();
 
     // Commands
-    println!("  {}", "COMMANDS".dimmed());
-    println!("    {}      {}", "apply".white(), "Apply configuration".dimmed());
-    println!("    {}      {}", "check".white(), "Check what would change (dry-run)".dimmed());
-    println!("    {}       {}", "plan".white(), "List items from config".dimmed());
-    println!("    {}       {}", "list".white(), "List available configs".dimmed());
-    println!("    {}        {}", "run".white(), "Run a command from config".dimmed());
-    println!("    {}       {}", "test".white(), "Test in container".dimmed());
-    println!("    {}       {}", "bake".white(), "Bake into standalone binary".dimmed());
+    println!("  {}", c!("COMMANDS", dimmed));
+    println!("    {}      {}", c!("apply", white), c!("Apply configuration", dimmed));
+    println!("    {}      {}", c!("check", white), c!("Check what would change (dry-run)", dimmed));
+    println!("    {}       {}", c!("plan", white), c!("List items from config", dimmed));
+    println!("    {}       {}", c!("list", white), c!("List available configs", dimmed));
+    println!("    {}        {}", c!("run", white), c!("Run a command from config", dimmed));
+    println!("    {}       {}", c!("test", white), c!("Test in container", dimmed));
+    println!("    {}       {}", c!("bake", white), c!("Bake into standalone binary", dimmed));
     println!();
 
     // Options
-    println!("  {}", "OPTIONS".dimmed());
-    println!("    {}  {}", "-C, --config <PATH>".white(), "Config path".dimmed());
-    println!("    {}  {}", "-t, --target <HOST>".white(), "Remote target (user@host)".dimmed());
-    println!("    {} {}", "--remotes <PATTERN>".white(), "Remote targets from inventory (glob)".dimmed());
-    println!("    {}              {}", "-h, --help".white(), "Print help".dimmed());
-    println!("    {}           {}", "-V, --version".white(), "Print version".dimmed());
+    println!("  {}", c!("OPTIONS", dimmed));
+    println!("    {}  {}", c!("-C, --config <PATH>", white), c!("Config path", dimmed));
+    println!("    {}  {}", c!("-t, --target <HOST>", white), c!("Remote target (user@host)", dimmed));
+    println!("    {} {}", c!("--remotes <PATTERN>", white), c!("Remote targets from inventory (glob)", dimmed));
+    println!("    {}              {}", c!("-h, --help", white), c!("Print help", dimmed));
+    println!("    {}           {}", c!("-V, --version", white), c!("Print version", dimmed));
     println!();
 
     // Available configs
     if !configs.is_empty() {
-        println!("  {}", "CONFIGS".dimmed());
+        println!("  {}", c!("CONFIGS", dimmed));
         for cfg_info in &configs {
             let label = if cfg_info.name != cfg_info.key {
                 format!("{} ({})", cfg_info.key, cfg_info.name)
@@ -1050,9 +1080,9 @@ fn print_rich_help(meta: Option<&config::Meta>, config_path: &PathBuf) -> Result
                 cfg_info.key.clone()
             };
             if let Some(d) = &cfg_info.description {
-                println!("    {}  {}", label.green(), d.dimmed());
+                println!("    {}  {}", c!(label, green), c!(d, dimmed));
             } else {
-                println!("    {}", label.green());
+                println!("    {}", c!(label, green));
             }
         }
         println!();
@@ -1061,14 +1091,14 @@ fn print_rich_help(meta: Option<&config::Meta>, config_path: &PathBuf) -> Result
     // Run commands
     if let Some(run) = &cfg.run {
         if !run.is_empty() {
-            println!("  {}", "RUN".dimmed());
+            println!("  {}", c!("RUN", dimmed));
             let mut cmds: Vec<_> = run.iter().collect();
             cmds.sort_by_key(|(k, _)| *k);
             for (cmd_name, rc) in cmds {
                 if let Some(d) = &rc.description {
-                    println!("    {}  {}", cmd_name.yellow(), d.dimmed());
+                    println!("    {}  {}", c!(cmd_name, yellow), c!(d, dimmed));
                 } else {
-                    println!("    {}", cmd_name.yellow());
+                    println!("    {}", c!(cmd_name, yellow));
                 }
             }
             println!();

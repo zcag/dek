@@ -15,7 +15,7 @@ fn format_duration(d: Duration) -> String {
 }
 
 pub fn print_header(text: &str) {
-    println!("{}", text.bold());
+    println!("{}", c!(text, bold));
 }
 
 pub fn print_check_result(item: &StateItem, result: &CheckResult) {
@@ -23,18 +23,18 @@ pub fn print_check_result(item: &StateItem, result: &CheckResult) {
         CheckResult::Satisfied => {
             println!(
                 "  {} {} {}",
-                "✓".green(),
-                item.kind.dimmed(),
-                item.key.white()
+                c!("✓", green),
+                c!(item.kind, dimmed),
+                c!(item.key, white)
             );
         }
         CheckResult::Missing { detail } => {
             println!(
                 "  {} {} {} {}",
-                "✗".red(),
-                item.kind.dimmed(),
-                item.key.white(),
-                format!("({})", detail).dimmed()
+                c!("✗", red),
+                c!(item.kind, dimmed),
+                c!(item.key, white),
+                c!(format!("({})", detail), dimmed)
             );
         }
     }
@@ -43,48 +43,48 @@ pub fn print_check_result(item: &StateItem, result: &CheckResult) {
 pub fn print_plan_item(item: &StateItem) {
     println!(
         "  {} {} {}",
-        "•".blue(),
-        item.kind.dimmed(),
-        item.key.white()
+        c!("•", blue),
+        c!(item.kind, dimmed),
+        c!(item.key, white)
     );
 }
 
 pub fn print_apply_done(item: &StateItem) {
     println!(
         "  {} {} {}",
-        "✓".green(),
-        item.kind.dimmed(),
-        item.key.white()
+        c!("✓", green),
+        c!(item.kind, dimmed),
+        c!(item.key, white)
     );
 }
 
 pub fn print_apply_skip(item: &StateItem) {
     println!(
         "  {} {} {} {}",
-        "•".dimmed(),
-        item.kind.dimmed(),
-        item.key.dimmed(),
-        "(ok)".dimmed()
+        c!("•", dimmed),
+        c!(item.kind, dimmed),
+        c!(item.key, dimmed),
+        c!("(ok)", dimmed)
     );
 }
 
 pub fn print_skip_run_if(item: &StateItem) {
     println!(
         "  {} {} {} {}",
-        "•".dimmed(),
-        item.kind.dimmed(),
-        item.key.dimmed(),
-        "(skipped)".dimmed()
+        c!("•", dimmed),
+        c!(item.kind, dimmed),
+        c!(item.key, dimmed),
+        c!("(skipped)", dimmed)
     );
 }
 
 pub fn print_apply_fail(item: &StateItem, err: &str) {
     println!(
         "  {} {} {} {}",
-        "✗".red(),
-        item.kind.dimmed(),
-        item.key.white(),
-        format!("({})", err).red()
+        c!("✗", red),
+        c!(item.kind, dimmed),
+        c!(item.key, white),
+        c!(format!("({})", err), red)
     );
 }
 
@@ -92,37 +92,37 @@ pub fn print_summary(total: usize, changed: usize, failed: usize, issues: usize,
     println!();
     let timing = format!("({})", format_duration(elapsed));
     let issues_part = if issues > 0 {
-        format!(", {} issues", issues.to_string().yellow())
+        format!(", {} issues", c!(issues.to_string(), yellow))
     } else {
         String::new()
     };
     if failed > 0 {
         println!(
             "{} {} total, {} changed, {} failed{} {}",
-            "✗".red(),
+            c!("✗", red),
             total,
-            changed.to_string().green(),
-            failed.to_string().red(),
+            c!(changed.to_string(), green),
+            c!(failed.to_string(), red),
             issues_part,
-            timing.dimmed()
+            c!(timing, dimmed)
         );
     } else if changed > 0 || issues > 0 {
-        let icon = if issues > 0 { format!("{}", "→".yellow()) } else { format!("{}", "✓".green()) };
+        let icon = if issues > 0 { format!("{}", c!("→", yellow)) } else { format!("{}", c!("✓", green)) };
         println!(
             "{} {} total, {} changed{} {}",
             icon,
             total,
-            changed.to_string().green(),
+            c!(changed.to_string(), green),
             issues_part,
-            timing.dimmed()
+            c!(timing, dimmed)
         );
     } else {
         println!(
             "{} {} total, {} up to date {}",
-            "✓".green(),
+            c!("✓", green),
             total,
-            "all".green(),
-            timing.dimmed()
+            c!("all", green),
+            c!(timing, dimmed)
         );
     }
 }
@@ -133,32 +133,32 @@ pub fn print_check_summary(total: usize, satisfied: usize, missing: usize, elaps
     if missing > 0 {
         println!(
             "{} {} total, {} ok, {} missing {}",
-            "→".yellow(),
+            c!("→", yellow),
             total,
-            satisfied.to_string().green(),
-            missing.to_string().yellow(),
-            timing.dimmed()
+            c!(satisfied.to_string(), green),
+            c!(missing.to_string(), yellow),
+            c!(timing, dimmed)
         );
     } else {
         println!(
             "{} {} total, {} up to date {}",
-            "✓".green(),
+            c!("✓", green),
             total,
-            "all".green(),
-            timing.dimmed()
+            c!("all", green),
+            c!(timing, dimmed)
         );
     }
 }
 
 pub fn print_plan_summary(total: usize) {
     println!();
-    println!("{} {} items", "•".blue(), total);
+    println!("{} {} items", c!("•", blue), total);
 }
 
 pub fn print_resolving_requirements(count: usize) {
     println!(
         "  {} resolving {} requirement{}...",
-        "→".yellow(),
+        c!("→", yellow),
         count,
         if count == 1 { "" } else { "s" }
     );
@@ -172,7 +172,7 @@ pub fn start_spinner(item: &StateItem) -> ProgressBar {
             .template("  {spinner:.cyan} {prefix} {msg}")
             .unwrap(),
     );
-    pb.set_prefix(format!("{} {}", item.kind.dimmed(), item.key.white()));
+    pb.set_prefix(format!("{} {}", c!(item.kind, dimmed), c!(item.key, white)));
     pb.enable_steady_tick(Duration::from_millis(80));
     pb
 }
@@ -191,7 +191,7 @@ pub fn update_spinner(pb: &ProgressBar, line: &str) {
     } else {
         line
     };
-    pb.set_message(format!("{} {}", "›".dimmed(), truncated.dimmed()));
+    pb.set_message(format!("{} {}", c!("›", dimmed), c!(truncated, dimmed)));
 }
 
 pub fn finish_spinner_done(pb: &ProgressBar, item: &StateItem) {

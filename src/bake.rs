@@ -87,22 +87,22 @@ pub fn run(config_path: Option<PathBuf>, output: PathBuf) -> Result<()> {
         .or_else(|| crate::config::find_default_config())
         .ok_or_else(|| anyhow::anyhow!("No config found"))?;
 
-    println!("{}", "Baking".bold());
+    println!("{}", c!("Baking", bold));
     println!();
-    println!("  {} Config: {}", "•".blue(), config_path.display());
-    println!("  {} Output: {}", "•".blue(), output.display());
+    println!("  {} Config: {}", c!("•", blue), config_path.display());
+    println!("  {} Output: {}", c!("•", blue), output.display());
     println!();
 
     // Handle tar.gz input - extract first, then re-tarball
     let actual_path = if crate::util::is_tar_gz(&config_path) {
-        println!("  {} Extracting archive...", "→".yellow());
+        println!("  {} Extracting archive...", c!("→", yellow));
         crate::util::extract_tar_gz(&config_path)?
     } else {
         config_path
     };
 
     // Create tarball of the config path
-    println!("  {} Creating archive...", "→".yellow());
+    println!("  {} Creating archive...", c!("→", yellow));
     let tar_data = create_tarball(&actual_path)?;
 
     // Hash for cache key
@@ -113,7 +113,7 @@ pub fn run(config_path: Option<PathBuf>, output: PathBuf) -> Result<()> {
     let exe = std::env::current_exe()?;
 
     // Copy exe to output
-    println!("  {} Writing binary...", "→".yellow());
+    println!("  {} Writing binary...", c!("→", yellow));
     fs::copy(&exe, &output)?;
 
     // Append tar data and footer
@@ -157,7 +157,7 @@ pub fn run(config_path: Option<PathBuf>, output: PathBuf) -> Result<()> {
     }
 
     let size = fs::metadata(&output)?.len();
-    println!("  {} Created {} ({})", "✓".green(), output.display(), format_size(size));
+    println!("  {} Created {} ({})", c!("✓", green), output.display(), format_size(size));
 
     Ok(())
 }
