@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
+use indicatif::ProgressBar;
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 /// Parse package spec: "pkg:bin" or "pkg" (bin defaults to pkg)
 pub fn parse_spec(spec: &str) -> (String, String) {
@@ -56,6 +58,60 @@ pub fn run_sudo(cmd: &str, args: &[&str]) -> Result<Output> {
     let mut sudo_args = vec![cmd];
     sudo_args.extend(args);
     run_cmd("sudo", &sudo_args)
+}
+
+/// Run a command with piped output, updating a spinner with each line
+pub fn run_cmd_live(cmd: &str, args: &[&str], pb: &ProgressBar) -> Result<Output> {
+    let mut child = Command::new(cmd)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("Failed to run: {} {}", cmd, args.join(" ")))?;
+
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+
+    let pb2 = pb.clone();
+    let stderr_thread = std::thread::spawn(move || {
+        let mut collected = Vec::new();
+        for line in BufReader::new(stderr).lines() {
+            if let Ok(line) = line {
+                crate::output::update_spinner(&pb2, &line);
+                collected.extend(line.as_bytes().iter().copied());
+                collected.push(b'\n');
+            }
+        }
+        collected
+    });
+
+    let mut stdout_bytes = Vec::new();
+    for line in BufReader::new(stdout).lines() {
+        if let Ok(line) = line {
+            crate::output::update_spinner(pb, &line);
+            stdout_bytes.extend(line.as_bytes().iter().copied());
+            stdout_bytes.push(b'\n');
+        }
+    }
+
+    let status = child.wait()?;
+    let stderr_bytes = stderr_thread.join().unwrap_or_default();
+
+    Ok(Output {
+        status,
+        stdout: stdout_bytes,
+        stderr: stderr_bytes,
+    })
+}
+
+/// Run a command with sudo and piped output, updating a spinner with each line
+pub fn run_sudo_live(cmd: &str, args: &[&str], pb: &ProgressBar) -> Result<Output> {
+    if unsafe { libc::geteuid() } == 0 {
+        return run_cmd_live(cmd, args, pb);
+    }
+    let mut sudo_args = vec![cmd];
+    sudo_args.extend(args);
+    run_cmd_live("sudo", &sudo_args, pb)
 }
 
 /// Run a command and return stdout as string

@@ -108,15 +108,15 @@ impl Runner {
                 continue;
             }
 
-            output::print_apply_start(item);
+            let pb = output::start_spinner(item);
 
-            match provider.apply(item) {
+            match provider.apply_live(item, &pb) {
                 Ok(()) => {
-                    output::print_apply_done(item);
+                    output::finish_spinner_done(&pb, item);
                     changed += 1;
                 }
                 Err(e) => {
-                    output::print_apply_fail(item, &e.to_string());
+                    output::finish_spinner_fail(&pb, item, &e.to_string());
                     failed += 1;
                 }
             }

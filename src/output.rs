@@ -1,4 +1,5 @@
 use crate::providers::{CheckResult, StateItem};
+use indicatif::ProgressBar;
 use owo_colors::OwoColorize;
 use std::time::Duration;
 
@@ -152,4 +153,37 @@ pub fn print_resolving_requirements(count: usize) {
         count,
         if count == 1 { "" } else { "s" }
     );
+}
+
+pub fn start_spinner(item: &StateItem) -> ProgressBar {
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        indicatif::ProgressStyle::default_spinner()
+            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+            .template("  {spinner:.cyan} {msg}")
+            .unwrap(),
+    );
+    pb.set_message(format!("{} {}", item.kind.dimmed(), item.key.white()));
+    pb.enable_steady_tick(Duration::from_millis(80));
+    pb
+}
+
+pub fn update_spinner(pb: &ProgressBar, line: &str) {
+    let width = console::Term::stdout().size().1 as usize;
+    let truncated = if line.len() > width.saturating_sub(6) {
+        &line[..width.saturating_sub(6)]
+    } else {
+        line
+    };
+    pb.set_message(truncated.dimmed().to_string());
+}
+
+pub fn finish_spinner_done(pb: &ProgressBar, item: &StateItem) {
+    pb.finish_and_clear();
+    print_apply_done(item);
+}
+
+pub fn finish_spinner_fail(pb: &ProgressBar, item: &StateItem, err: &str) {
+    pb.finish_and_clear();
+    print_apply_fail(item, err);
 }

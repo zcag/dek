@@ -1,6 +1,7 @@
 use super::{CheckResult, InstallMethod, Provider, Requirement, StateItem};
-use crate::util::{command_exists, run_cmd, run_cmd_ok, run_sudo, SysPkgManager};
+use crate::util::{command_exists, run_cmd, run_cmd_live, run_cmd_ok, run_sudo, run_sudo_live, SysPkgManager};
 use anyhow::{bail, Result};
+use indicatif::ProgressBar;
 
 // =============================================================================
 // OS (auto-detect system package manager)
@@ -45,6 +46,29 @@ impl Provider for OsProvider {
         let (pkg_name, _) = crate::util::parse_spec(&state.key);
         pm.install(&pkg_name)
     }
+
+    fn apply_live(&self, state: &StateItem, pb: &ProgressBar) -> Result<()> {
+        let Some(pm) = SysPkgManager::detect() else {
+            return WebiProvider.apply(state);
+        };
+
+        let (pkg_name, _) = crate::util::parse_spec(&state.key);
+        let output = match pm {
+            SysPkgManager::Pacman => {
+                let out = run_sudo_live("pacman", &["-S", "--noconfirm", &pkg_name], pb)?;
+                if !out.status.success() {
+                    return crate::util::install_with_yay(&pkg_name);
+                }
+                return Ok(());
+            }
+            SysPkgManager::Apt => run_sudo_live("apt-get", &["install", "-y", &pkg_name], pb)?,
+            SysPkgManager::Brew => run_cmd_live("brew", &["install", &pkg_name], pb)?,
+        };
+        if !output.status.success() {
+            bail!("Failed to install '{}': {}", pkg_name, String::from_utf8_lossy(&output.stderr));
+        }
+        Ok(())
+    }
 }
 
 // =============================================================================
@@ -80,6 +104,15 @@ impl Provider for AptProvider {
         }
         Ok(())
     }
+
+    fn apply_live(&self, state: &StateItem, pb: &ProgressBar) -> Result<()> {
+        let (pkg_name, _) = crate::util::parse_spec(&state.key);
+        let output = run_sudo_live("apt-get", &["install", "-y", &pkg_name], pb)?;
+        if !output.status.success() {
+            bail!("apt-get install failed: {}", String::from_utf8_lossy(&output.stderr));
+        }
+        Ok(())
+    }
 }
 
 // =============================================================================
@@ -109,7 +142,15 @@ impl Provider for PacmanProvider {
         let (pkg_name, _) = crate::util::parse_spec(&state.key);
         let output = run_sudo("pacman", &["-S", "--noconfirm", &pkg_name])?;
         if !output.status.success() {
-            // Fallback to yay for AUR packages
+            return crate::util::install_with_yay(&pkg_name);
+        }
+        Ok(())
+    }
+
+    fn apply_live(&self, state: &StateItem, pb: &ProgressBar) -> Result<()> {
+        let (pkg_name, _) = crate::util::parse_spec(&state.key);
+        let output = run_sudo_live("pacman", &["-S", "--noconfirm", &pkg_name], pb)?;
+        if !output.status.success() {
             return crate::util::install_with_yay(&pkg_name);
         }
         Ok(())
@@ -163,6 +204,21 @@ impl Provider for CargoProvider {
         }
         Ok(())
     }
+
+    fn apply_live(&self, state: &StateItem, pb: &ProgressBar) -> Result<()> {
+        let (pkg_name, _) = crate::util::parse_spec(&state.key);
+
+        let output = run_cmd_live("cargo", &["binstall", "-y", &pkg_name], pb)?;
+        if output.status.success() {
+            return Ok(());
+        }
+
+        let output = run_cmd_live("cargo", &["install", &pkg_name], pb)?;
+        if !output.status.success() {
+            bail!("cargo install failed: {}", String::from_utf8_lossy(&output.stderr));
+        }
+        Ok(())
+    }
 }
 
 // =============================================================================
@@ -194,6 +250,15 @@ impl Provider for GoProvider {
     fn apply(&self, state: &StateItem) -> Result<()> {
         let (pkg_name, _) = go_parse_spec(&state.key);
         let output = run_cmd("go", &["install", &pkg_name])?;
+        if !output.status.success() {
+            bail!("go install failed: {}", String::from_utf8_lossy(&output.stderr));
+        }
+        Ok(())
+    }
+
+    fn apply_live(&self, state: &StateItem, pb: &ProgressBar) -> Result<()> {
+        let (pkg_name, _) = go_parse_spec(&state.key);
+        let output = run_cmd_live("go", &["install", &pkg_name], pb)?;
         if !output.status.success() {
             bail!("go install failed: {}", String::from_utf8_lossy(&output.stderr));
         }
@@ -308,6 +373,15 @@ impl Provider for NpmProvider {
         }
         Ok(())
     }
+
+    fn apply_live(&self, state: &StateItem, pb: &ProgressBar) -> Result<()> {
+        let (pkg_name, _) = crate::util::parse_spec(&state.key);
+        let output = run_cmd_live("npm", &["install", "-g", &pkg_name], pb)?;
+        if !output.status.success() {
+            bail!("npm install failed: {}", String::from_utf8_lossy(&output.stderr));
+        }
+        Ok(())
+    }
 }
 
 // =============================================================================
@@ -342,6 +416,16 @@ impl Provider for PipProvider {
         let (pkg_name, _) = crate::util::parse_spec(&state.key);
         let pip = if command_exists("pip3") { "pip3" } else { "pip" };
         let output = run_cmd(pip, &["install", "--user", &pkg_name])?;
+        if !output.status.success() {
+            bail!("pip install failed: {}", String::from_utf8_lossy(&output.stderr));
+        }
+        Ok(())
+    }
+
+    fn apply_live(&self, state: &StateItem, pb: &ProgressBar) -> Result<()> {
+        let (pkg_name, _) = crate::util::parse_spec(&state.key);
+        let pip = if command_exists("pip3") { "pip3" } else { "pip" };
+        let output = run_cmd_live(pip, &["install", "--user", &pkg_name], pb)?;
         if !output.status.success() {
             bail!("pip install failed: {}", String::from_utf8_lossy(&output.stderr));
         }
@@ -383,6 +467,15 @@ impl Provider for PipxProvider {
     fn apply(&self, state: &StateItem) -> Result<()> {
         let (pkg_name, _) = crate::util::parse_spec(&state.key);
         let output = run_cmd("pipx", &["install", &pkg_name])?;
+        if !output.status.success() {
+            bail!("pipx install failed: {}", String::from_utf8_lossy(&output.stderr));
+        }
+        Ok(())
+    }
+
+    fn apply_live(&self, state: &StateItem, pb: &ProgressBar) -> Result<()> {
+        let (pkg_name, _) = crate::util::parse_spec(&state.key);
+        let output = run_cmd_live("pipx", &["install", &pkg_name], pb)?;
         if !output.status.success() {
             bail!("pipx install failed: {}", String::from_utf8_lossy(&output.stderr));
         }

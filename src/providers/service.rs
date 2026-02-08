@@ -1,6 +1,7 @@
 use super::{CheckResult, Provider, StateItem};
-use crate::util::{run_cmd, run_sudo};
+use crate::util::{run_cmd, run_cmd_live, run_sudo, run_sudo_live};
 use anyhow::{bail, Result};
+use indicatif::ProgressBar;
 
 pub struct SystemdProvider;
 
@@ -54,7 +55,6 @@ impl Provider for SystemdProvider {
         let name = &state.key;
         let user = config.is_user();
 
-        // Enable if required
         if config.enabled {
             let output = systemctl_run(&["enable", name], user)?;
             if !output.status.success() {
@@ -65,9 +65,36 @@ impl Provider for SystemdProvider {
             }
         }
 
-        // Start if active state required
         if config.state == "active" {
             let output = systemctl_run(&["start", name], user)?;
+            if !output.status.success() {
+                bail!(
+                    "systemctl start failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    fn apply_live(&self, state: &StateItem, pb: &ProgressBar) -> Result<()> {
+        let config = parse_service_config(state)?;
+        let name = &state.key;
+        let user = config.is_user();
+
+        if config.enabled {
+            let output = systemctl_run_live(&["enable", name], user, pb)?;
+            if !output.status.success() {
+                bail!(
+                    "systemctl enable failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        }
+
+        if config.state == "active" {
+            let output = systemctl_run_live(&["start", name], user, pb)?;
             if !output.status.success() {
                 bail!(
                     "systemctl start failed: {}",
@@ -99,6 +126,17 @@ fn systemctl_run(args: &[&str], user: bool) -> Result<std::process::Output> {
         run_cmd("systemctl", &full_args)
     } else {
         run_sudo("systemctl", args)
+    }
+}
+
+/// Run systemctl for mutations with live progress
+fn systemctl_run_live(args: &[&str], user: bool, pb: &ProgressBar) -> Result<std::process::Output> {
+    if user {
+        let mut full_args = vec!["--user"];
+        full_args.extend(args);
+        run_cmd_live("systemctl", &full_args, pb)
+    } else {
+        run_sudo_live("systemctl", args, pb)
     }
 }
 

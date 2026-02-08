@@ -8,6 +8,7 @@ pub mod shell;
 
 use crate::util::{command_exists, run_cmd, run_install_script, SysPkgManager};
 use anyhow::{bail, Result};
+use indicatif::ProgressBar;
 use std::collections::HashSet;
 use std::fmt;
 
@@ -252,6 +253,11 @@ pub trait Provider {
     /// Requirements that must be satisfied before this provider can run
     fn requires(&self) -> Vec<Requirement> {
         vec![]
+    }
+
+    /// Apply with live progress feedback. Default falls back to apply().
+    fn apply_live(&self, state: &StateItem, _pb: &ProgressBar) -> Result<()> {
+        self.apply(state)
     }
 }
 
