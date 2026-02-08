@@ -88,24 +88,32 @@ pub fn print_apply_fail(item: &StateItem, err: &str) {
     );
 }
 
-pub fn print_summary(total: usize, changed: usize, failed: usize, elapsed: Duration) {
+pub fn print_summary(total: usize, changed: usize, failed: usize, issues: usize, elapsed: Duration) {
     println!();
     let timing = format!("({})", format_duration(elapsed));
+    let issues_part = if issues > 0 {
+        format!(", {} issues", issues.to_string().yellow())
+    } else {
+        String::new()
+    };
     if failed > 0 {
         println!(
-            "{} {} total, {} changed, {} failed {}",
+            "{} {} total, {} changed, {} failed{} {}",
             "✗".red(),
             total,
             changed.to_string().green(),
             failed.to_string().red(),
+            issues_part,
             timing.dimmed()
         );
-    } else if changed > 0 {
+    } else if changed > 0 || issues > 0 {
+        let icon = if issues > 0 { format!("{}", "→".yellow()) } else { format!("{}", "✓".green()) };
         println!(
-            "{} {} total, {} changed {}",
-            "✓".green(),
+            "{} {} total, {} changed{} {}",
+            icon,
             total,
             changed.to_string().green(),
+            issues_part,
             timing.dimmed()
         );
     } else {

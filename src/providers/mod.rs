@@ -267,6 +267,11 @@ pub trait Provider {
         false
     }
 
+    /// Whether this provider is check-only (can't apply changes)
+    fn is_check_only(&self) -> bool {
+        false
+    }
+
     /// Apply with live progress feedback. Default falls back to apply().
     fn apply_live(&self, state: &StateItem, _pb: &ProgressBar) -> Result<()> {
         self.apply(state)

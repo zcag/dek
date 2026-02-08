@@ -191,12 +191,18 @@ pub struct Inventory {
 /// Assertion to check before apply
 #[derive(Debug, Deserialize, Clone)]
 pub struct AssertConfig {
-    /// Shell command to run
-    pub check: String,
-    /// Optional regex to match against stdout
+    /// Display label
+    pub name: Option<String>,
+    /// Shell command to run (exit 0 = pass)
+    pub check: Option<String>,
+    /// Shell command whose stdout lines are findings (0 lines = pass)
+    pub foreach: Option<String>,
+    /// Optional regex to match against stdout (check mode only)
     pub stdout: Option<String>,
-    /// Optional regex to match against stderr
+    /// Optional regex to match against stderr (check mode only)
     pub stderr: Option<String>,
+    /// Custom failure message
+    pub message: Option<String>,
     #[serde(default)]
     pub run_if: Option<String>,
 }

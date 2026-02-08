@@ -121,6 +121,7 @@ impl Runner {
         let mut changed = 0;
         let mut failed = 0;
         let mut skipped = 0;
+        let mut issues = 0;
 
         for item in items {
             if !should_run(item) {
@@ -141,6 +142,12 @@ impl Runner {
                 continue;
             }
 
+            if provider.is_check_only() {
+                output::print_check_result(item, &check);
+                issues += 1;
+                continue;
+            }
+
             let pb = output::start_spinner(item);
 
             match provider.apply_live(item, &pb) {
@@ -155,7 +162,7 @@ impl Runner {
             }
         }
 
-        output::print_summary(items.len() - skipped, changed, failed, start.elapsed());
+        output::print_summary(items.len() - skipped, changed, failed, issues, start.elapsed());
 
         if failed > 0 {
             bail!("{} items failed to apply", failed);
@@ -362,12 +369,20 @@ fn collect_state_items(config: &Config, base_dir: &Path) -> Vec<StateItem> {
 
     // Assertions
     for assertion in &config.assert {
-        // Encode: check\0stdout_pattern\0stderr_pattern
+        let (cmd, mode) = if let Some(ref foreach) = assertion.foreach {
+            (foreach.as_str(), "foreach")
+        } else if let Some(ref check) = assertion.check {
+            (check.as_str(), "check")
+        } else {
+            continue; // skip invalid: neither check nor foreach
+        };
+        let key = assertion.name.as_deref().unwrap_or(cmd);
         let stdout = assertion.stdout.as_deref().unwrap_or("");
         let stderr = assertion.stderr.as_deref().unwrap_or("");
-        let value = format!("{}\x00{}", stdout, stderr);
+        let message = assertion.message.as_deref().unwrap_or("");
+        let value = format!("{}\x00{}\x00{}\x00{}\x00{}", cmd, mode, stdout, stderr, message);
         items.push(
-            StateItem::new("assert", &assertion.check)
+            StateItem::new("assert", key)
                 .with_value(value)
                 .with_run_if(assertion.run_if.clone()),
         );
