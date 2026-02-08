@@ -255,6 +255,11 @@ pub trait Provider {
         vec![]
     }
 
+    /// Whether this provider may need sudo to apply
+    fn needs_sudo(&self) -> bool {
+        false
+    }
+
     /// Apply with live progress feedback. Default falls back to apply().
     fn apply_live(&self, state: &StateItem, _pb: &ProgressBar) -> Result<()> {
         self.apply(state)

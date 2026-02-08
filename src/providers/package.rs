@@ -14,6 +14,10 @@ impl Provider for OsProvider {
         "package.os"
     }
 
+    fn needs_sudo(&self) -> bool {
+        matches!(SysPkgManager::detect(), Some(SysPkgManager::Pacman | SysPkgManager::Apt))
+    }
+
     fn check(&self, state: &StateItem) -> Result<CheckResult> {
         let Some(pm) = SysPkgManager::detect() else {
             return WebiProvider.check(state);
@@ -82,6 +86,10 @@ impl Provider for AptProvider {
         "package.apt"
     }
 
+    fn needs_sudo(&self) -> bool {
+        true
+    }
+
     fn check(&self, state: &StateItem) -> Result<CheckResult> {
         let (pkg_name, _) = crate::util::parse_spec(&state.key);
         let output = run_cmd("dpkg-query", &["-W", "-f=${Status}", &pkg_name])?;
@@ -124,6 +132,10 @@ pub struct PacmanProvider;
 impl Provider for PacmanProvider {
     fn name(&self) -> &'static str {
         "package.pacman"
+    }
+
+    fn needs_sudo(&self) -> bool {
+        true
     }
 
     fn check(&self, state: &StateItem) -> Result<CheckResult> {

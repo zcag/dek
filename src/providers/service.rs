@@ -10,6 +10,10 @@ impl Provider for SystemdProvider {
         "service"
     }
 
+    fn needs_sudo(&self) -> bool {
+        true
+    }
+
     fn check(&self, state: &StateItem) -> Result<CheckResult> {
         let config = parse_service_config(state)?;
         let name = &state.key;

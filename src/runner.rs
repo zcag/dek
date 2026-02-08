@@ -1,9 +1,10 @@
 use crate::config::Config;
 use crate::output;
 use crate::providers::{resolve_requirements, ProviderRegistry, Requirement, StateItem};
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use std::collections::HashSet;
 use std::path::Path;
+use std::process::Command;
 use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -92,6 +93,14 @@ impl Runner {
             resolve_requirements(&requirements)?;
         }
 
+        // Pre-authenticate sudo once if any provider will need it
+        if self.any_needs_sudo(items) {
+            Command::new("sudo")
+                .arg("-v")
+                .status()
+                .context("Failed to authenticate sudo")?;
+        }
+
         let mut changed = 0;
         let mut failed = 0;
 
@@ -129,6 +138,18 @@ impl Runner {
         }
 
         Ok(())
+    }
+
+    fn any_needs_sudo(&self, items: &[StateItem]) -> bool {
+        if unsafe { libc::geteuid() } == 0 {
+            return false;
+        }
+        items.iter().any(|item| {
+            self.registry
+                .get(&item.kind)
+                .map(|p| p.needs_sudo())
+                .unwrap_or(false)
+        })
     }
 
     fn collect_requirements(&self, items: &[StateItem]) -> Result<Vec<Requirement>> {

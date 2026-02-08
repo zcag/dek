@@ -105,17 +105,11 @@ pub fn run_cmd_live(cmd: &str, args: &[&str], pb: &ProgressBar) -> Result<Output
 }
 
 /// Run a command with sudo and piped output, updating a spinner with each line.
-/// Suspends the spinner to let sudo prompt for a password if needed.
+/// Assumes sudo credentials are already cached (via pre-auth in runner).
 pub fn run_sudo_live(cmd: &str, args: &[&str], pb: &ProgressBar) -> Result<Output> {
     if unsafe { libc::geteuid() } == 0 {
         return run_cmd_live(cmd, args, pb);
     }
-    // Pre-authenticate: suspend spinner so the tty password prompt is visible
-    let auth = pb.suspend(|| {
-        Command::new("sudo").arg("-v").status()
-    });
-    auth.context("Failed to authenticate sudo")?;
-
     let mut sudo_args = vec![cmd];
     sudo_args.extend(args);
     run_cmd_live("sudo", &sudo_args, pb)
