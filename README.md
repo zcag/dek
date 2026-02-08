@@ -22,12 +22,20 @@ dek plan               # list items (no state check)
 dek list               # list available configs
 ```
 
+Config is loaded from: `./dek.toml`, `./dek/`, or `$XDG_CONFIG_HOME/dek/` (fallback).
+
 ## Config
 
 ```toml
 # Packages
-[package.os]  # auto-detects: pacman, apt, dnf, brew
+[package.os]  # auto-detects: pacman, apt, brew
 items = ["curl", "git", "htop"]
+
+[package.apt]
+items = ["build-essential"]
+
+[package.pacman]  # falls back to yay for AUR packages
+items = ["base-devel", "yay"]
 
 [package.cargo]
 items = ["bat", "eza", "ripgrep"]
@@ -41,11 +49,24 @@ items = ["prettier", "typescript"]
 [package.pip]
 items = ["httpie", "tldr"]
 
+[package.pipx]
+items = ["poetry", "black"]
+
+[package.webi]
+items = ["jq", "yq"]
+
 # Systemd services
 [[service]]
 name = "docker"
 state = "active"
 enabled = true
+
+# User services (systemctl --user, no sudo)
+[[service]]
+name = "syncthing"
+state = "active"
+enabled = true
+scope = "user"
 
 # Files
 [file.copy]
@@ -57,12 +78,34 @@ enabled = true
 [file.ensure_line]
 "~/.bashrc" = ["export PATH=$HOME/.local/bin:$PATH"]
 
+# Structured line management
+[[file.line]]
+path = "/etc/needrestart/needrestart.conf"
+line = "$nrconf{restart} = 'l';"
+original = "#$nrconf{restart} = 'i';"
+mode = "replace"
+
+[[file.line]]
+path = "/etc/ssh/sshd_config"
+line = "PermitRootLogin no"
+original_regex = "^#?PermitRootLogin\\s+"
+mode = "replace"
+
 # Shell
 [alias]
 la = "ls -larth"
+g = "git"
 
 [env]
 EDITOR = "nvim"
+
+# System
+timezone = "Europe/Istanbul"
+hostname = "workstation"
+
+# Scripts (installed to ~/.local/bin)
+[script]
+cleanup = "scripts/cleanup.sh"
 
 # Custom commands
 [[command]]
@@ -79,10 +122,22 @@ stdout = "Docker version 2[0-9]"
 check = "test -f /etc/hosts"
 ```
 
+## Package:Binary Syntax
+
+When package and binary names differ:
+
+```toml
+[package.cargo]
+items = ["ripgrep:rg", "fd-find:fd", "bottom:btm"]
+```
+
+Installs `ripgrep`, checks for `rg` in PATH.
+
 ## Split Config
 
 ```
 dek/
+├── meta.toml           # name, description, banner
 ├── 00-packages.toml
 ├── 10-services.toml
 ├── 20-dotfiles.toml
@@ -122,6 +177,8 @@ dek apply -t user@host
 dek check -t server1
 ```
 
+Use `-q`/`--quiet` to suppress banners (auto-enabled for multi-host).
+
 ### Multi-host with Inventory
 
 Ansible-style `inventory.ini` (one host per line, `[groups]` and `;comments` ignored):
@@ -138,17 +195,15 @@ db-master
 ```
 
 ```bash
-dek apply --remotes 'web-*'    # glob pattern
-dek apply --remotes '*'        # all hosts
+dek apply -r 'web-*'    # glob pattern (-r is short for --remotes)
+dek apply -r '*'         # all hosts
 ```
 
-Override inventory path in `meta.toml`:
+Hosts are deployed in parallel. Override inventory path in `meta.toml`:
 
 ```toml
 inventory = "../devops/inventory.ini"
 ```
-
-Shows matched hosts and prompts for confirmation before applying.
 
 ### Deploy Workflow
 
@@ -174,10 +229,10 @@ state = "active"
 ```
 
 ```bash
-dek apply --remotes 'app-*'
+dek apply -r 'app-*'
 # 1. Runs build locally
 # 2. Includes fresh jar
-# 3. Ships to all app-* hosts
+# 3. Ships to all app-* hosts in parallel
 # 4. Copies jar, restarts service
 ```
 
@@ -210,14 +265,3 @@ dek bake ./dek -o mysetup
 ./mysetup apply        # apply all
 ./mysetup run deploy   # run commands
 ```
-
-## Package:Binary Syntax
-
-When package and binary names differ:
-
-```toml
-[package.cargo]
-items = ["ripgrep:rg", "fd-find:fd", "bottom:btm"]
-```
-
-Installs `ripgrep`, checks for `rg` in PATH.
