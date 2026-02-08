@@ -107,7 +107,13 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Handle inline mode: dek cargo.bat apt.htop
+    // If first arg has no dot, treat as: dek run <name> [args...]
     if !cli.inline.is_empty() {
+        if !cli.inline[0].contains('.') {
+            let mut args = cli.inline;
+            let name = args.remove(0);
+            return run_command(cli.config, Some(name), args);
+        }
         return run_inline(&cli.inline);
     }
 
