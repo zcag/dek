@@ -52,6 +52,10 @@ impl Runner {
 
     fn plan_all(&self, items: &[StateItem]) -> Result<()> {
         for item in items {
+            if !should_run(item) {
+                output::print_skip_run_if(item);
+                continue;
+            }
             output::print_plan_item(item);
         }
         output::print_plan_summary(items.len());
@@ -63,7 +67,15 @@ impl Runner {
         let mut satisfied = 0;
         let mut missing = 0;
 
+        let mut skipped = 0;
+
         for item in items {
+            if !should_run(item) {
+                output::print_skip_run_if(item);
+                skipped += 1;
+                continue;
+            }
+
             let provider = self
                 .registry
                 .get(&item.kind)
@@ -79,7 +91,12 @@ impl Runner {
             }
         }
 
-        output::print_check_summary(items.len(), satisfied, missing, start.elapsed());
+        output::print_check_summary(
+            items.len() - skipped,
+            satisfied,
+            missing,
+            start.elapsed(),
+        );
         Ok(())
     }
 
@@ -103,8 +120,15 @@ impl Runner {
 
         let mut changed = 0;
         let mut failed = 0;
+        let mut skipped = 0;
 
         for item in items {
+            if !should_run(item) {
+                output::print_skip_run_if(item);
+                skipped += 1;
+                continue;
+            }
+
             let provider = self
                 .registry
                 .get(&item.kind)
@@ -131,7 +155,7 @@ impl Runner {
             }
         }
 
-        output::print_summary(items.len(), changed, failed, start.elapsed());
+        output::print_summary(items.len() - skipped, changed, failed, start.elapsed());
 
         if failed > 0 {
             bail!("{} items failed to apply", failed);
@@ -171,6 +195,19 @@ impl Runner {
     }
 }
 
+fn should_run(item: &StateItem) -> bool {
+    match &item.run_if {
+        None => true,
+        Some(cmd) => Command::new("sh")
+            .args(["-c", cmd])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false),
+    }
+}
+
 fn resolve_source_path(src: &str, base_dir: &Path) -> String {
     if src.starts_with('/') || src.starts_with('~') {
         src.to_string()
@@ -186,47 +223,53 @@ fn collect_state_items(config: &Config, base_dir: &Path) -> Vec<StateItem> {
     if let Some(ref pkg) = config.package {
         if let Some(ref os) = pkg.os {
             for item in &os.items {
-                items.push(StateItem::new("package.os", item));
+                items.push(StateItem::new("package.os", item).with_run_if(os.run_if.clone()));
             }
         }
         if let Some(ref apt) = pkg.apt {
             for item in &apt.items {
-                items.push(StateItem::new("package.apt", item));
+                items.push(StateItem::new("package.apt", item).with_run_if(apt.run_if.clone()));
             }
         }
         if let Some(ref pacman) = pkg.pacman {
             for item in &pacman.items {
-                items.push(StateItem::new("package.pacman", item));
+                items.push(
+                    StateItem::new("package.pacman", item).with_run_if(pacman.run_if.clone()),
+                );
             }
         }
         if let Some(ref cargo) = pkg.cargo {
             for item in &cargo.items {
-                items.push(StateItem::new("package.cargo", item));
+                items.push(
+                    StateItem::new("package.cargo", item).with_run_if(cargo.run_if.clone()),
+                );
             }
         }
         if let Some(ref go) = pkg.go {
             for item in &go.items {
-                items.push(StateItem::new("package.go", item));
+                items.push(StateItem::new("package.go", item).with_run_if(go.run_if.clone()));
             }
         }
         if let Some(ref npm) = pkg.npm {
             for item in &npm.items {
-                items.push(StateItem::new("package.npm", item));
+                items.push(StateItem::new("package.npm", item).with_run_if(npm.run_if.clone()));
             }
         }
         if let Some(ref pip) = pkg.pip {
             for item in &pip.items {
-                items.push(StateItem::new("package.pip", item));
+                items.push(StateItem::new("package.pip", item).with_run_if(pip.run_if.clone()));
             }
         }
         if let Some(ref pipx) = pkg.pipx {
             for item in &pipx.items {
-                items.push(StateItem::new("package.pipx", item));
+                items.push(
+                    StateItem::new("package.pipx", item).with_run_if(pipx.run_if.clone()),
+                );
             }
         }
         if let Some(ref webi) = pkg.webi {
             for item in &webi.items {
-                items.push(StateItem::new("package.webi", item));
+                items.push(StateItem::new("package.webi", item).with_run_if(webi.run_if.clone()));
             }
         }
     }
@@ -234,7 +277,11 @@ fn collect_state_items(config: &Config, base_dir: &Path) -> Vec<StateItem> {
     // Services
     for svc in &config.service {
         let value = format!("state={},enabled={},scope={}", svc.state, svc.enabled, svc.scope);
-        items.push(StateItem::new("service", &svc.name).with_value(value));
+        items.push(
+            StateItem::new("service", &svc.name)
+                .with_value(value)
+                .with_run_if(svc.run_if.clone()),
+        );
     }
 
     // Files
@@ -270,7 +317,11 @@ fn collect_state_items(config: &Config, base_dir: &Path) -> Vec<StateItem> {
                 (entry.original.as_deref().unwrap_or(""), "literal")
             };
             let value = format!("{}\x01{}\x01{}\x01{}", entry.line, original, mode, match_type);
-            items.push(StateItem::new("file.line", &entry.path).with_value(value));
+            items.push(
+                StateItem::new("file.line", &entry.path)
+                    .with_value(value)
+                    .with_run_if(entry.run_if.clone()),
+            );
         }
     }
 
@@ -292,7 +343,11 @@ fn collect_state_items(config: &Config, base_dir: &Path) -> Vec<StateItem> {
     for cmd in &config.command {
         // Encode check and apply with null separator
         let value = format!("{}\x00{}", cmd.check, cmd.apply);
-        items.push(StateItem::new("command", &cmd.name).with_value(value));
+        items.push(
+            StateItem::new("command", &cmd.name)
+                .with_value(value)
+                .with_run_if(cmd.run_if.clone()),
+        );
     }
 
     // Scripts
@@ -311,7 +366,11 @@ fn collect_state_items(config: &Config, base_dir: &Path) -> Vec<StateItem> {
         let stdout = assertion.stdout.as_deref().unwrap_or("");
         let stderr = assertion.stderr.as_deref().unwrap_or("");
         let value = format!("{}\x00{}", stdout, stderr);
-        items.push(StateItem::new("assert", &assertion.check).with_value(value));
+        items.push(
+            StateItem::new("assert", &assertion.check)
+                .with_value(value)
+                .with_run_if(assertion.run_if.clone()),
+        );
     }
 
     items

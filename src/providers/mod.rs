@@ -40,6 +40,7 @@ pub struct StateItem {
     pub kind: String,
     pub key: String,
     pub value: Option<String>,
+    pub run_if: Option<String>,
 }
 
 impl StateItem {
@@ -48,11 +49,17 @@ impl StateItem {
             kind: kind.into(),
             key: key.into(),
             value: None,
+            run_if: None,
         }
     }
 
     pub fn with_value(mut self, value: impl Into<String>) -> Self {
         self.value = Some(value.into());
+        self
+    }
+
+    pub fn with_run_if(mut self, run_if: Option<String>) -> Self {
+        self.run_if = run_if;
         self
     }
 }

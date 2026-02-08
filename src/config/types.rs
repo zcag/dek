@@ -72,6 +72,8 @@ pub struct PackageConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct PackageList {
     pub items: Vec<String>,
+    #[serde(default)]
+    pub run_if: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -84,6 +86,8 @@ pub struct ServiceConfig {
     /// "system" (default) or "user"
     #[serde(default = "default_service_scope")]
     pub scope: String,
+    #[serde(default)]
+    pub run_if: Option<String>,
 }
 
 fn default_service_scope() -> String {
@@ -117,6 +121,8 @@ pub struct FileLineConfig {
     /// "replace" (default) or "below"
     #[serde(default)]
     pub mode: FileLineMode,
+    #[serde(default)]
+    pub run_if: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -135,6 +141,8 @@ pub struct CommandConfig {
     pub check: String,
     /// Shell command to apply the state
     pub apply: String,
+    #[serde(default)]
+    pub run_if: Option<String>,
 }
 
 /// Runnable command (dek run <name>)
@@ -185,4 +193,6 @@ pub struct AssertConfig {
     pub stdout: Option<String>,
     /// Optional regex to match against stderr
     pub stderr: Option<String>,
+    #[serde(default)]
+    pub run_if: Option<String>,
 }

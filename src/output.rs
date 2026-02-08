@@ -68,6 +68,16 @@ pub fn print_apply_skip(item: &StateItem) {
     );
 }
 
+pub fn print_skip_run_if(item: &StateItem) {
+    println!(
+        "  {} {} {} {}",
+        "•".dimmed(),
+        item.kind.dimmed(),
+        item.key.dimmed(),
+        "(skipped)".dimmed()
+    );
+}
+
 pub fn print_apply_fail(item: &StateItem, err: &str) {
     println!(
         "  {} {} {} {}",
