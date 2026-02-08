@@ -151,22 +151,29 @@ pub fn start_spinner(item: &StateItem) -> ProgressBar {
     pb.set_style(
         indicatif::ProgressStyle::default_spinner()
             .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
-            .template("  {spinner:.cyan} {msg}")
+            .template("  {spinner:.cyan} {prefix} {msg}")
             .unwrap(),
     );
-    pb.set_message(format!("{} {}", item.kind.dimmed(), item.key.white()));
+    pb.set_prefix(format!("{} {}", item.kind.dimmed(), item.key.white()));
     pb.enable_steady_tick(Duration::from_millis(80));
     pb
 }
 
 pub fn update_spinner(pb: &ProgressBar, line: &str) {
+    let line = line.trim();
+    if line.is_empty() {
+        return;
+    }
+    let prefix_len = pb.prefix().len();
     let width = console::Term::stdout().size().1 as usize;
-    let truncated = if line.len() > width.saturating_sub(6) {
-        &line[..width.saturating_sub(6)]
+    // 6 = indent(2) + spinner(1) + spaces(3)
+    let available = width.saturating_sub(6 + prefix_len + 3);
+    let truncated = if line.len() > available {
+        &line[..available]
     } else {
         line
     };
-    pb.set_message(truncated.dimmed().to_string());
+    pb.set_message(format!("{} {}", "›".dimmed(), truncated.dimmed()));
 }
 
 pub fn finish_spinner_done(pb: &ProgressBar, item: &StateItem) {
