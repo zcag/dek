@@ -64,13 +64,13 @@ fn list_configs_from_dir(dir: &Path, optional: bool, configs: &mut Vec<ConfigInf
             continue;
         }
         let config = load_file(&entry.path())?;
-        let name = config
-            .meta
-            .as_ref()
+        let meta = config.meta.as_ref();
+        let name = meta
             .and_then(|m| m.name.clone())
             .unwrap_or_else(|| key.clone());
-        let description = config.meta.as_ref().and_then(|m| m.description.clone());
-        configs.push(ConfigInfo { key, name, description, optional });
+        let description = meta.and_then(|m| m.description.clone());
+        let run_if = meta.and_then(|m| m.run_if.clone());
+        configs.push(ConfigInfo { key, name, description, optional, run_if });
     }
     Ok(())
 }
@@ -114,9 +114,27 @@ fn load_from_dir(dir: &Path, filter_keys: Option<&[String]>, merged: &mut Config
         }
 
         let config = load_file(&entry.path())?;
+
+        // Skip config if run_if condition fails
+        if let Some(ref run_if) = config.meta.as_ref().and_then(|m| m.run_if.clone()) {
+            if !eval_run_if(run_if) {
+                continue;
+            }
+        }
+
         merge_config(merged, config);
     }
     Ok(())
+}
+
+pub fn eval_run_if(cmd: &str) -> bool {
+    std::process::Command::new("sh")
+        .args(["-c", cmd])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 fn get_config_entries(dir: &Path) -> Result<Vec<fs::DirEntry>> {
@@ -221,9 +239,12 @@ fn merge_config(base: &mut Config, other: Config) {
 
 fn merge_package_list(base: &mut Option<PackageList>, other: Option<PackageList>) {
     if let Some(other_list) = other {
-        base.get_or_insert_with(|| PackageList { items: vec![] })
-            .items
-            .extend(other_list.items);
+        base.get_or_insert_with(|| PackageList {
+            items: vec![],
+            run_if: None,
+        })
+        .items
+        .extend(other_list.items);
     }
 }
 

@@ -614,18 +614,21 @@ fn run_list(config_path: Option<PathBuf>) -> Result<()> {
         return Ok(());
     }
 
+    let (main_configs, optional_configs): (Vec<_>, Vec<_>) =
+        configs.into_iter().partition(|c| !c.optional);
+
     output::print_header("Available configs");
     println!();
-    for cfg in configs {
-        let label = if cfg.name != cfg.key {
-            format!("{} ({})", cfg.key, cfg.name)
-        } else {
-            cfg.key
-        };
-        if let Some(d) = cfg.description {
-            println!("  {} - {}", label.green(), d.dimmed());
-        } else {
-            println!("  {}", label.green());
+    for cfg in &main_configs {
+        print_config_entry(cfg);
+    }
+
+    if !optional_configs.is_empty() {
+        println!();
+        output::print_header("Optional configs");
+        println!();
+        for cfg in &optional_configs {
+            print_config_entry(cfg);
         }
     }
 
@@ -637,6 +640,32 @@ fn run_list(config_path: Option<PathBuf>) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn print_config_entry(cfg: &config::ConfigInfo) {
+    use config::eval_run_if;
+
+    let skipped = cfg.run_if.as_ref().map(|c| !eval_run_if(c)).unwrap_or(false);
+
+    let label = if cfg.name != cfg.key {
+        format!("{} ({})", cfg.key, cfg.name)
+    } else {
+        cfg.key.clone()
+    };
+
+    if skipped {
+        let desc = cfg.description.as_deref().unwrap_or("");
+        let suffix = if desc.is_empty() {
+            "(skipped)".to_string()
+        } else {
+            format!("{} (skipped)", desc)
+        };
+        println!("  {} - {}", label.dimmed(), suffix.dimmed());
+    } else if let Some(ref d) = cfg.description {
+        println!("  {} - {}", label.green(), d.dimmed());
+    } else {
+        println!("  {}", label.green());
+    }
 }
 
 fn run_command(config_path: Option<PathBuf>, name: Option<String>, args: Vec<String>) -> Result<()> {

@@ -53,6 +53,8 @@ pub struct ConfigMeta {
     pub name: Option<String>,
     /// Description shown in help
     pub description: Option<String>,
+    /// Shell command — skip this config when it exits non-zero
+    pub run_if: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -176,6 +178,8 @@ pub struct ConfigInfo {
     pub description: Option<String>,
     /// Whether this is in optional/ (not applied by default)
     pub optional: bool,
+    /// Shell command condition from [meta] run_if
+    pub run_if: Option<String>,
 }
 
 /// Inventory of remote hosts (loaded from inventory.ini)
