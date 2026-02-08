@@ -109,7 +109,8 @@ impl Provider for PacmanProvider {
         let (pkg_name, _) = crate::util::parse_spec(&state.key);
         let output = run_sudo("pacman", &["-S", "--noconfirm", &pkg_name])?;
         if !output.status.success() {
-            bail!("pacman install failed: {}", String::from_utf8_lossy(&output.stderr));
+            // Fallback to yay for AUR packages
+            return crate::util::install_with_yay(&pkg_name);
         }
         Ok(())
     }

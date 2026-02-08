@@ -135,7 +135,14 @@ impl SysPkgManager {
     /// Install a package using this package manager
     pub fn install(&self, pkg: &str) -> Result<()> {
         let output = match self {
-            Self::Pacman => run_sudo("pacman", &["-Sy", "--noconfirm", pkg])?,
+            Self::Pacman => {
+                let out = run_sudo("pacman", &["-S", "--noconfirm", pkg])?;
+                if !out.status.success() {
+                    // Pacman failed - try yay for AUR packages
+                    return install_with_yay(pkg);
+                }
+                return Ok(());
+            }
             Self::Apt => run_sudo("apt-get", &["install", "-y", pkg])?,
             Self::Brew => run_cmd("brew", &["install", pkg])?,
         };
@@ -149,6 +156,54 @@ impl SysPkgManager {
         }
         Ok(())
     }
+}
+
+/// Install a package via yay (AUR helper), installing yay first if needed
+pub fn install_with_yay(pkg: &str) -> Result<()> {
+    if !command_exists("yay") {
+        install_yay()?;
+    }
+    let output = run_cmd("yay", &["-S", "--noconfirm", pkg])?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "Failed to install '{}' via yay: {}",
+            pkg,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(())
+}
+
+/// Install yay from AUR
+fn install_yay() -> Result<()> {
+    use owo_colors::OwoColorize;
+    println!("    {} installing yay...", "→".yellow());
+
+    // Ensure base-devel and git
+    let _ = run_sudo("pacman", &["-S", "--needed", "--noconfirm", "git", "base-devel"]);
+
+    let tmp = "/tmp/dek-yay-install";
+    let _ = std::fs::remove_dir_all(tmp);
+
+    let clone = Command::new("git")
+        .args(["clone", "https://aur.archlinux.org/yay.git", tmp])
+        .output()
+        .context("Failed to clone yay")?;
+    if !clone.status.success() {
+        anyhow::bail!("Failed to clone yay from AUR");
+    }
+
+    let build = Command::new("makepkg")
+        .args(["-si", "--noconfirm"])
+        .current_dir(tmp)
+        .status()
+        .context("Failed to build yay")?;
+    if !build.success() {
+        anyhow::bail!("Failed to build/install yay");
+    }
+
+    let _ = std::fs::remove_dir_all(tmp);
+    Ok(())
 }
 
 /// Run a script from a URL via curl | sh
