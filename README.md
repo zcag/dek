@@ -115,11 +115,59 @@ apply = "createdb mydb"
 
 # Assertions
 [[assert]]
-check = "docker --version"
-stdout = "Docker version 2[0-9]"
+name = "dotty up to date"
+check = "git -C ~/dotty fetch -q && test $(git -C ~/dotty rev-list --count HEAD..@{upstream}) -eq 0"
+message = "dotty has remote changes"
 
 [[assert]]
-check = "test -f /etc/hosts"
+name = "note conflicts"
+foreach = "rg --files ~/Sync/vault 2>/dev/null | grep conflict | sed 's|.*/||'"
+
+[[assert]]
+name = "stow"
+foreach = "for p in common nvim tmux; do stow -d ~/dotty -n -v $p 2>&1 | grep -q LINK && echo $p; done"
+```
+
+## Assertions
+
+Assertions are check-only items — they report issues but don't change anything. Two modes:
+
+**check** — pass if command exits 0:
+
+```toml
+[[assert]]
+name = "docker running"
+check = "docker info >/dev/null 2>&1"
+message = "docker daemon is not running"
+stdout = "some regex"  # optional: also match stdout
+```
+
+**foreach** — each stdout line is a finding (zero lines = pass):
+
+```toml
+[[assert]]
+name = "stow packages"
+foreach = "for p in common nvim; do stow -n -v $p 2>&1 | grep -q LINK && echo $p; done"
+```
+
+In `dek check`, assertions show as `✓`/`✗`. In `dek apply`, failing assertions show as issues (not "changed") and don't block other items.
+
+## Conditional Execution
+
+Any item supports `run_if` — a shell command that gates execution (skip if non-zero):
+
+```toml
+[package.pacman]
+items = ["base-devel"]
+run_if = "command -v pacman"
+
+[[assert]]
+name = "desktop stow"
+run_if = "echo $(uname -n) | grep -qE 'marko|bender'"
+foreach = "..."
+
+[meta]
+run_if = "test -d /etc/apt"  # skip entire config file
 ```
 
 ## Package:Binary Syntax
@@ -177,7 +225,7 @@ dek apply -t user@host
 dek check -t server1
 ```
 
-Use `-q`/`--quiet` to suppress banners (auto-enabled for multi-host).
+Use `-q`/`--quiet` to suppress banners (auto-enabled for multi-host). Use `--color always|never|auto` to control colored output.
 
 ### Multi-host with Inventory
 
