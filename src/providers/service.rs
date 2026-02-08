@@ -12,9 +12,10 @@ impl Provider for SystemdProvider {
     fn check(&self, state: &StateItem) -> Result<CheckResult> {
         let config = parse_service_config(state)?;
         let name = &state.key;
+        let user = config.is_user();
 
         // Check if service exists
-        let exists = run_cmd("systemctl", &["cat", name])?.status.success();
+        let exists = systemctl_cmd(&["cat", name], user)?.status.success();
         if !exists {
             return Ok(CheckResult::Missing {
                 detail: format!("service '{}' not found", name),
@@ -23,7 +24,7 @@ impl Provider for SystemdProvider {
 
         // Check enabled state if required
         if config.enabled {
-            let enabled = run_cmd("systemctl", &["is-enabled", name])?
+            let enabled = systemctl_cmd(&["is-enabled", name], user)?
                 .status
                 .success();
             if !enabled {
@@ -35,7 +36,7 @@ impl Provider for SystemdProvider {
 
         // Check active state if required
         if config.state == "active" {
-            let active = run_cmd("systemctl", &["is-active", name])?
+            let active = systemctl_cmd(&["is-active", name], user)?
                 .status
                 .success();
             if !active {
@@ -51,10 +52,11 @@ impl Provider for SystemdProvider {
     fn apply(&self, state: &StateItem) -> Result<()> {
         let config = parse_service_config(state)?;
         let name = &state.key;
+        let user = config.is_user();
 
         // Enable if required
         if config.enabled {
-            let output = run_sudo("systemctl", &["enable", name])?;
+            let output = systemctl_run(&["enable", name], user)?;
             if !output.status.success() {
                 bail!(
                     "systemctl enable failed: {}",
@@ -65,7 +67,7 @@ impl Provider for SystemdProvider {
 
         // Start if active state required
         if config.state == "active" {
-            let output = run_sudo("systemctl", &["start", name])?;
+            let output = systemctl_run(&["start", name], user)?;
             if !output.status.success() {
                 bail!(
                     "systemctl start failed: {}",
@@ -78,17 +80,47 @@ impl Provider for SystemdProvider {
     }
 }
 
+/// Run systemctl for checking (no sudo needed)
+fn systemctl_cmd(args: &[&str], user: bool) -> Result<std::process::Output> {
+    if user {
+        let mut full_args = vec!["--user"];
+        full_args.extend(args);
+        run_cmd("systemctl", &full_args)
+    } else {
+        run_cmd("systemctl", args)
+    }
+}
+
+/// Run systemctl for mutations - user scope runs directly, system scope uses sudo
+fn systemctl_run(args: &[&str], user: bool) -> Result<std::process::Output> {
+    if user {
+        let mut full_args = vec!["--user"];
+        full_args.extend(args);
+        run_cmd("systemctl", &full_args)
+    } else {
+        run_sudo("systemctl", args)
+    }
+}
+
 struct ServiceConfig {
     state: String,
     enabled: bool,
+    scope: String,
+}
+
+impl ServiceConfig {
+    fn is_user(&self) -> bool {
+        self.scope == "user"
+    }
 }
 
 fn parse_service_config(state: &StateItem) -> Result<ServiceConfig> {
-    let value = state.value.as_deref().unwrap_or("state=active,enabled=false");
+    let value = state.value.as_deref().unwrap_or("state=active,enabled=false,scope=system");
 
     let mut config = ServiceConfig {
         state: "active".to_string(),
         enabled: false,
+        scope: "system".to_string(),
     };
 
     for part in value.split(',') {
@@ -96,6 +128,7 @@ fn parse_service_config(state: &StateItem) -> Result<ServiceConfig> {
             match key.trim() {
                 "state" => config.state = val.trim().to_string(),
                 "enabled" => config.enabled = val.trim() == "true",
+                "scope" => config.scope = val.trim().to_string(),
                 _ => {}
             }
         }

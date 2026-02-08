@@ -81,6 +81,13 @@ pub struct ServiceConfig {
     pub state: String,
     #[serde(default)]
     pub enabled: bool,
+    /// "system" (default) or "user"
+    #[serde(default = "default_service_scope")]
+    pub scope: String,
+}
+
+fn default_service_scope() -> String {
+    "system".to_string()
 }
 
 fn default_service_state() -> String {

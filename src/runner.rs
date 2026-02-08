@@ -212,7 +212,7 @@ fn collect_state_items(config: &Config, base_dir: &Path) -> Vec<StateItem> {
 
     // Services
     for svc in &config.service {
-        let value = format!("state={},enabled={}", svc.state, svc.enabled);
+        let value = format!("state={},enabled={},scope={}", svc.state, svc.enabled, svc.scope);
         items.push(StateItem::new("service", &svc.name).with_value(value));
     }
 
