@@ -28,6 +28,11 @@ impl Runner {
     }
 
     pub fn run(&self, config: &Config, config_path: &Path) -> Result<()> {
+        // Apply proxy settings early so all commands inherit them
+        if let Some(ref proxy) = config.proxy {
+            crate::config::apply_proxy(proxy);
+        }
+
         let base_dir = if config_path.is_file() {
             config_path.parent().unwrap_or(Path::new("."))
         } else {
@@ -343,6 +348,24 @@ fn collect_state_items(config: &Config, base_dir: &Path) -> Vec<StateItem> {
     if let Some(ref env) = config.env {
         for (name, value) in env {
             items.push(StateItem::new("env", name).with_value(value));
+        }
+    }
+
+    // Proxy persistence (adds to env items if persist: true)
+    if let Some(ref proxy) = config.proxy {
+        if proxy.persist {
+            if let Some(ref url) = proxy.http {
+                items.push(StateItem::new("env", "http_proxy").with_value(url));
+                items.push(StateItem::new("env", "HTTP_PROXY").with_value(url));
+            }
+            if let Some(ref url) = proxy.https {
+                items.push(StateItem::new("env", "https_proxy").with_value(url));
+                items.push(StateItem::new("env", "HTTPS_PROXY").with_value(url));
+            }
+            if let Some(ref no_proxy) = proxy.no_proxy {
+                items.push(StateItem::new("env", "no_proxy").with_value(no_proxy));
+                items.push(StateItem::new("env", "NO_PROXY").with_value(no_proxy));
+            }
         }
     }
 

@@ -165,6 +165,23 @@ fn file_key(path: &Path) -> String {
 }
 
 fn merge_config(base: &mut Config, other: Config) {
+    // Merge proxy (later config wins for each field)
+    if let Some(proxy) = other.proxy {
+        let base_proxy = base.proxy.get_or_insert_with(ProxyConfig::default);
+        if proxy.http.is_some() {
+            base_proxy.http = proxy.http;
+        }
+        if proxy.https.is_some() {
+            base_proxy.https = proxy.https;
+        }
+        if proxy.no_proxy.is_some() {
+            base_proxy.no_proxy = proxy.no_proxy;
+        }
+        if proxy.persist {
+            base_proxy.persist = true;
+        }
+    }
+
     // Merge packages
     if let Some(pkg) = other.package {
         let base_pkg = base.package.get_or_insert_with(PackageConfig::default);
@@ -245,6 +262,23 @@ fn merge_package_list(base: &mut Option<PackageList>, other: Option<PackageList>
         })
         .items
         .extend(other_list.items);
+    }
+}
+
+/// Apply proxy settings to current process environment
+/// Call this early so all child commands inherit the proxy
+pub fn apply_proxy(proxy: &ProxyConfig) {
+    if let Some(ref url) = proxy.http {
+        std::env::set_var("http_proxy", url);
+        std::env::set_var("HTTP_PROXY", url);
+    }
+    if let Some(ref url) = proxy.https {
+        std::env::set_var("https_proxy", url);
+        std::env::set_var("HTTPS_PROXY", url);
+    }
+    if let Some(ref no_proxy) = proxy.no_proxy {
+        std::env::set_var("no_proxy", no_proxy);
+        std::env::set_var("NO_PROXY", no_proxy);
     }
 }
 

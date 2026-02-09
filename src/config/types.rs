@@ -22,6 +22,8 @@ pub struct Meta {
 pub struct Config {
     /// Per-file metadata (name, description)
     pub meta: Option<ConfigMeta>,
+    /// Proxy settings (applied to current process for all commands)
+    pub proxy: Option<ProxyConfig>,
     pub package: Option<PackageConfig>,
     #[serde(default)]
     pub service: Vec<ServiceConfig>,
@@ -43,6 +45,21 @@ pub struct Config {
     /// Assertions to check before apply
     #[serde(default)]
     pub assert: Vec<AssertConfig>,
+}
+
+/// Proxy configuration
+#[derive(Debug, Deserialize, Default, Clone)]
+#[serde(default)]
+pub struct ProxyConfig {
+    /// HTTP proxy URL (sets http_proxy and HTTP_PROXY)
+    pub http: Option<String>,
+    /// HTTPS proxy URL (sets https_proxy and HTTPS_PROXY)
+    pub https: Option<String>,
+    /// No-proxy list (comma-separated, sets no_proxy and NO_PROXY)
+    pub no_proxy: Option<String>,
+    /// Persist to ~/.dek_env for future shell sessions (default: false)
+    #[serde(default)]
+    pub persist: bool,
 }
 
 /// Per-file metadata
