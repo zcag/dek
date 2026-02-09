@@ -255,19 +255,16 @@ inventory = "../devops/inventory.ini"
 
 ### Deploy Workflow
 
-For build-and-deploy workflows:
+Use `[[artifact]]` to build locally before shipping to remotes or baking:
 
 ```toml
-# Local build step (runs before remote)
-[run.build]
-local = true
-cmd = "mvn package -DskipTests"
+[[artifact]]
+name = "app.jar"
+build = "mvn package -DskipTests -q"
+watch = ["src", "pom.xml"]              # skip build if unchanged
+src = "target/app-1.0.jar"              # build output
+dest = "artifacts/app.jar"              # placed in config for shipping
 
-# Include build artifacts
-[include]
-"target/app.jar" = "artifacts/app.jar"
-
-# Deploy to remote
 [file.copy]
 "artifacts/app.jar" = "/opt/app/app.jar"
 
@@ -278,11 +275,20 @@ state = "active"
 
 ```bash
 dek apply -r 'app-*'
-# 1. Runs build locally
-# 2. Includes fresh jar
+# 1. Builds artifact locally (skips if watch hash unchanged)
+# 2. Packages config + artifact into tarball
 # 3. Ships to all app-* hosts in parallel
 # 4. Copies jar, restarts service
+
+dek bake -o myapp
+# Artifact is built and included in the baked binary
 ```
+
+Artifacts are resolved before any config processing — they work with `apply`, `apply -r`, and `bake`.
+
+Freshness can be determined two ways:
+- **`watch`** — list of files/directories to hash (path + size + mtime). Build is skipped when the hash matches the previous run. Best for source trees.
+- **`check`** — shell command that exits 0 if the artifact is fresh. Use for custom logic (e.g., `test target/app.jar -nt pom.xml`).
 
 ## Inline
 

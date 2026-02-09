@@ -45,6 +45,9 @@ pub struct Config {
     /// Assertions to check before apply
     #[serde(default)]
     pub assert: Vec<AssertConfig>,
+    /// Build artifacts (resolved before bake/deploy)
+    #[serde(default)]
+    pub artifact: Vec<ArtifactConfig>,
 }
 
 /// Proxy configuration
@@ -203,6 +206,24 @@ pub struct ConfigInfo {
 #[derive(Debug, Default, Clone)]
 pub struct Inventory {
     pub hosts: Vec<String>,
+}
+
+/// Build artifact (resolved before bake/deploy)
+#[derive(Debug, Deserialize, Clone)]
+pub struct ArtifactConfig {
+    /// Display label
+    pub name: Option<String>,
+    /// Shell command to build the artifact
+    pub build: String,
+    /// Shell command — skip build if exits 0 (artifact is fresh)
+    pub check: Option<String>,
+    /// Paths to watch — skip build if hash unchanged (files or directories)
+    #[serde(default)]
+    pub watch: Vec<String>,
+    /// Source path after build (relative to config dir)
+    pub src: String,
+    /// Destination path within config (included in tarball/bake)
+    pub dest: String,
 }
 
 /// Assertion to check before apply

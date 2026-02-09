@@ -101,9 +101,13 @@ pub fn run(config_path: Option<PathBuf>, output: PathBuf) -> Result<()> {
         config_path
     };
 
-    // Create tarball of the config path
+    // Resolve artifacts + includes before archiving
+    let dek_config = crate::config::load(&actual_path)?;
+    let prepared_path = crate::prepare_config(&actual_path, &dek_config)?;
+
+    // Create tarball of the prepared config
     println!("  {} Creating archive...", c!("→", yellow));
-    let tar_data = create_tarball(&actual_path)?;
+    let tar_data = create_tarball(&prepared_path)?;
 
     // Hash for cache key
     let hash = format!("{:x}", md5::compute(&tar_data));

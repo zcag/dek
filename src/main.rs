@@ -270,8 +270,11 @@ fn run_mode(mode: runner::Mode, config_path: Option<PathBuf>, configs: Vec<Strin
         config::load_selected(&resolved_path, &configs)?
     };
 
+    // Resolve artifacts (build outputs) before running
+    let working_path = prepare_config(&resolved_path, &config)?;
+
     let runner = runner::Runner::new(mode);
-    runner.run(&config, &resolved_path)
+    runner.run(&config, &working_path)
 }
 
 /// Pre-built archive and binary info for remote deployment
@@ -438,6 +441,13 @@ fn run_remotes(pattern: &str, cmd: &str, config_path: Option<PathBuf>, configs: 
             println!("  {}", name);
         }
     }
+    if !dek_config.artifact.is_empty() {
+        println!();
+        println!("{} Artifacts to build:", c!("::", blue));
+        for a in &dek_config.artifact {
+            println!("  {} → {}", a.name.as_deref().unwrap_or(&a.src), a.dest);
+        }
+    }
     if let Some(ref includes) = dek_config.include {
         if !includes.is_empty() {
             println!();
@@ -469,8 +479,8 @@ fn run_remotes(pattern: &str, cmd: &str, config_path: Option<PathBuf>, configs: 
         println!();
     }
 
-    // Prepare config with includes
-    let prepared_config = prepare_config_with_includes(&config_abs, &dek_config)?;
+    // Prepare config (artifacts + includes)
+    let prepared_config = prepare_config(&config_abs, &dek_config)?;
     let prepared_abs = std::fs::canonicalize(&prepared_config)?;
 
     // Create archive and compute binary hash once
@@ -575,45 +585,106 @@ fn run_local_command(name: &str, run_cfg: &config::RunConfig, config_path: &std:
     Ok(())
 }
 
-fn prepare_config_with_includes(config_path: &std::path::Path, dek_config: &config::Config) -> Result<PathBuf> {
+/// Prepare config: resolve artifacts + includes into a temp copy.
+/// Returns original path if nothing to prepare.
+pub(crate) fn prepare_config(config_path: &std::path::Path, dek_config: &config::Config) -> Result<PathBuf> {
     use std::fs;
 
-    let includes = match &dek_config.include {
-        Some(inc) if !inc.is_empty() => inc,
-        _ => return Ok(config_path.to_path_buf()), // No includes, use original
-    };
+    let has_artifacts = !dek_config.artifact.is_empty();
+    let has_includes = dek_config.include.as_ref().map(|i| !i.is_empty()).unwrap_or(false);
 
-    // Determine the base directory (config dir, or parent of config file)
+    if !has_artifacts && !has_includes {
+        return Ok(config_path.to_path_buf());
+    }
+
     let base_dir = if config_path.is_dir() {
         config_path
     } else {
         config_path.parent().unwrap()
     };
 
-    // Create temp directory and copy entire config directory
+    // Create temp copy of config
     let temp_dir = tempfile::tempdir()?;
-    let temp_path = temp_dir.into_path(); // Keep it around
+    let temp_path = temp_dir.into_path();
     copy_dir_recursive(base_dir, &temp_path)?;
 
-    // Resolve and copy includes
-    for (src, dst) in includes {
-        let src_path = if src.starts_with('/') {
-            PathBuf::from(src)
-        } else {
-            base_dir.join(src)
-        };
-        let dst_path = temp_path.join(dst);
+    // Resolve artifacts
+    if has_artifacts {
+        println!("{} Resolving artifacts...", c!("::", blue));
+        for artifact in &dek_config.artifact {
+            let label = artifact.name.as_deref().unwrap_or(&artifact.dest);
+            let src_path = if artifact.src.starts_with('/') {
+                PathBuf::from(&artifact.src)
+            } else {
+                base_dir.join(&artifact.src)
+            };
 
-        // Create parent directories
-        if let Some(parent) = dst_path.parent() {
-            fs::create_dir_all(parent)?;
+            // Determine if build is needed
+            let should_build = if !artifact.watch.is_empty() {
+                // watch mode: hash watched paths, compare with cache
+                !artifact_watch_fresh(base_dir, artifact, &src_path)
+            } else if let Some(ref cmd) = artifact.check {
+                // check mode: run shell command
+                !Command::new("sh")
+                    .arg("-c").arg(cmd).current_dir(base_dir)
+                    .stdout(Stdio::null()).stderr(Stdio::null())
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false)
+            } else {
+                true // no check, no watch → always build
+            };
+
+            if should_build {
+                println!("  {} {}", c!("→", yellow), label);
+                let status = Command::new("sh")
+                    .arg("-c").arg(&artifact.build).current_dir(base_dir)
+                    .stdin(Stdio::inherit()).stdout(Stdio::inherit()).stderr(Stdio::inherit())
+                    .status()?;
+                if !status.success() {
+                    bail!("Artifact build failed: {}", label);
+                }
+                // Update watch cache after successful build
+                if !artifact.watch.is_empty() {
+                    artifact_watch_save(base_dir, artifact);
+                }
+            } else {
+                println!("  {} {} {}", c!("•", dimmed), c!(label, dimmed), c!("(fresh)", dimmed));
+            }
+
+            if !src_path.exists() {
+                bail!("Artifact not found after build: {} (expected at {})", label, src_path.display());
+            }
+
+            // Copy to dest in temp
+            let dst_path = temp_path.join(&artifact.dest);
+            if let Some(parent) = dst_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(&src_path, &dst_path)?;
         }
+    }
 
-        if src_path.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path)?;
-        } else {
-            fs::copy(&src_path, &dst_path)
-                .map_err(|e| anyhow::anyhow!("Failed to copy '{}' to '{}': {}", src_path.display(), dst_path.display(), e))?;
+    // Resolve includes
+    if let Some(ref includes) = dek_config.include {
+        for (src, dst) in includes {
+            let src_path = if src.starts_with('/') {
+                PathBuf::from(src)
+            } else {
+                base_dir.join(src)
+            };
+            let dst_path = temp_path.join(dst);
+
+            if let Some(parent) = dst_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+
+            if src_path.is_dir() {
+                copy_dir_recursive(&src_path, &dst_path)?;
+            } else {
+                fs::copy(&src_path, &dst_path)
+                    .map_err(|e| anyhow::anyhow!("Failed to include '{}': {}", src_path.display(), e))?;
+            }
         }
     }
 
@@ -636,6 +707,73 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<()
         }
     }
     Ok(())
+}
+
+/// Compute a hash of all files under the watch paths (path + size + mtime).
+fn artifact_watch_hash(base_dir: &std::path::Path, artifact: &config::ArtifactConfig) -> String {
+    let mut entries: Vec<(String, u64, u64)> = Vec::new();
+
+    for watch in &artifact.watch {
+        let path = if watch.starts_with('/') {
+            PathBuf::from(watch)
+        } else {
+            base_dir.join(watch)
+        };
+        collect_file_meta(&path, &path, &mut entries);
+    }
+
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut buf = String::new();
+    for (path, size, mtime) in &entries {
+        buf.push_str(&format!("{}\0{}\0{}\n", path, size, mtime));
+    }
+    format!("{:x}", md5::compute(buf.as_bytes()))
+}
+
+fn collect_file_meta(path: &std::path::Path, root: &std::path::Path, out: &mut Vec<(String, u64, u64)>) {
+    use std::fs;
+
+    if path.is_file() {
+        if let Ok(meta) = fs::metadata(path) {
+            let rel = path.strip_prefix(root).unwrap_or(path).to_string_lossy().to_string();
+            let mtime = meta.modified().ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            out.push((rel, meta.len(), mtime));
+        }
+    } else if path.is_dir() {
+        if let Ok(rd) = fs::read_dir(path) {
+            for entry in rd.flatten() {
+                collect_file_meta(&entry.path(), root, out);
+            }
+        }
+    }
+}
+
+fn artifact_cache_path(base_dir: &std::path::Path, artifact: &config::ArtifactConfig) -> PathBuf {
+    let key = format!("{}\0{}", base_dir.display(), artifact.dest);
+    let hash = format!("{:x}", md5::compute(key.as_bytes()));
+    PathBuf::from(format!("/tmp/dek-watch-{}.hash", &hash[..16]))
+}
+
+/// Check if watched files are unchanged since last build.
+fn artifact_watch_fresh(base_dir: &std::path::Path, artifact: &config::ArtifactConfig, src_path: &std::path::Path) -> bool {
+    if !src_path.exists() {
+        return false; // artifact doesn't exist, must build
+    }
+    let cache = artifact_cache_path(base_dir, artifact);
+    let cached = std::fs::read_to_string(&cache).unwrap_or_default();
+    let current = artifact_watch_hash(base_dir, artifact);
+    cached.trim() == current
+}
+
+/// Save current watch hash to cache.
+fn artifact_watch_save(base_dir: &std::path::Path, artifact: &config::ArtifactConfig) {
+    let cache = artifact_cache_path(base_dir, artifact);
+    let hash = artifact_watch_hash(base_dir, artifact);
+    let _ = std::fs::write(&cache, &hash);
 }
 
 fn run_list(config_path: Option<PathBuf>) -> Result<()> {
