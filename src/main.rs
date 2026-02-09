@@ -141,6 +141,9 @@ fn main() -> Result<()> {
         }
     }
 
+    // Ensure well-known user binary dirs are in PATH (non-interactive SSH won't have them)
+    ensure_user_path();
+
     // Handle inline mode: dek cargo.bat apt.htop
     // If first arg has no dot, treat as: dek run <name> [args...]
     if !cli.inline.is_empty() {
@@ -226,6 +229,30 @@ fn main() -> Result<()> {
     }
 }
 
+/// Ensure well-known user binary directories are in PATH.
+/// Non-interactive SSH doesn't source .bashrc/.profile, so paths like
+/// ~/.cargo/bin, ~/.local/bin, ~/go/bin etc. are missing.
+fn ensure_user_path() {
+    let home = match std::env::var("HOME") {
+        Ok(h) => h,
+        Err(_) => return,
+    };
+    let extra = [
+        format!("{}/.cargo/bin", home),
+        format!("{}/.local/bin", home),
+        format!("{}/go/bin", home),
+        format!("{}/.npm-global/bin", home),
+    ];
+    let current = std::env::var("PATH").unwrap_or_default();
+    let mut parts: Vec<&str> = current.split(':').collect();
+    for dir in &extra {
+        if !parts.contains(&dir.as_str()) && std::path::Path::new(dir).is_dir() {
+            parts.push(dir);
+        }
+    }
+    std::env::set_var("PATH", parts.join(":"));
+}
+
 fn resolve_config(config: Option<PathBuf>) -> Result<PathBuf> {
     match config {
         Some(path) => Ok(path),
@@ -276,8 +303,13 @@ fn run_mode(mode: runner::Mode, config_path: Option<PathBuf>, configs: Vec<Strin
         config::load_selected(&resolved_path, &configs)?
     };
 
-    // Resolve artifacts (build outputs) before running
-    let working_path = prepare_config(&resolved_path, &config)?;
+    // Resolve artifacts (build outputs) before running.
+    // Skip when running from a tarball — config is already fully prepared (remote deploy / bake).
+    let working_path = if util::is_tar_gz(&path) {
+        resolved_path.clone()
+    } else {
+        prepare_config(&resolved_path, &config)?
+    };
 
     let runner = runner::Runner::new(mode);
     runner.run(&config, &working_path)
@@ -286,6 +318,7 @@ fn run_mode(mode: runner::Mode, config_path: Option<PathBuf>, configs: Vec<Strin
 /// Pre-built archive and binary info for remote deployment
 struct RemotePayload {
     local_tar: String,
+    config_hash: String,
     bin_hash: String,
     dek_binary: PathBuf,
 }
@@ -293,15 +326,15 @@ struct RemotePayload {
 impl RemotePayload {
     fn prepare(config_path: &std::path::Path) -> Result<Self> {
         let tar_data = util::create_tar_gz(config_path)?;
-        let hash = format!("{:x}", md5::compute(&tar_data));
-        let local_tar = format!("/tmp/dek-config-{}.tar.gz", &hash[..8]);
+        let config_hash = format!("{:x}", md5::compute(&tar_data));
+        let local_tar = format!("/tmp/dek-config-{}.tar.gz", &config_hash[..8]);
         std::fs::write(&local_tar, &tar_data)?;
 
         let dek_binary = std::env::current_exe()?;
         let bin_data = std::fs::read(&dek_binary)?;
         let bin_hash = format!("{:x}", md5::compute(&bin_data));
 
-        Ok(Self { local_tar, bin_hash, dek_binary })
+        Ok(Self { local_tar, config_hash, bin_hash, dek_binary })
     }
 
     fn cleanup(&self) {
@@ -670,6 +703,19 @@ pub(crate) fn prepare_config(config_path: &std::path::Path, dek_config: &config:
         println!("{} Resolving artifacts...", c!("::", blue));
         for artifact in &dek_config.artifact {
             let label = artifact.name.as_deref().unwrap_or(&artifact.dest);
+
+            // Skip if dest already exists in config (pre-resolved, e.g. shipped via remote deploy)
+            let dest_in_config = base_dir.join(&artifact.dest);
+            if dest_in_config.exists() {
+                let dst_path = temp_path.join(&artifact.dest);
+                if let Some(parent) = dst_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::copy(&dest_in_config, &dst_path)?;
+                println!("  {} {} {}", c!("•", dimmed), c!(label, dimmed), c!("(pre-resolved)", dimmed));
+                continue;
+            }
+
             let src_path = if artifact.src.starts_with('/') {
                 PathBuf::from(&artifact.src)
             } else {

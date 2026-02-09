@@ -252,6 +252,9 @@ fn merge_config(base: &mut Config, other: Config) {
 
     // Merge assertions
     base.assert.extend(other.assert);
+
+    // Merge artifacts
+    base.artifact.extend(other.artifact);
 }
 
 fn merge_package_list(base: &mut Option<PackageList>, other: Option<PackageList>) {
