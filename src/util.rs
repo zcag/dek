@@ -62,13 +62,28 @@ pub fn run_sudo(cmd: &str, args: &[&str]) -> Result<Output> {
 
 /// Run a command with piped output, updating a spinner with each line
 pub fn run_cmd_live(cmd: &str, args: &[&str], pb: &ProgressBar) -> Result<Output> {
-    let mut child = Command::new(cmd)
+    let child = Command::new(cmd)
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .with_context(|| format!("Failed to run: {} {}", cmd, args.join(" ")))?;
+    run_cmd_live_inner(child, pb)
+}
 
+/// Run a command with piped output and custom working directory
+pub fn run_cmd_live_dir(cmd: &str, args: &[&str], pb: &ProgressBar, dir: &Path) -> Result<Output> {
+    let child = Command::new(cmd)
+        .args(args)
+        .current_dir(dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("Failed to run: {} {}", cmd, args.join(" ")))?;
+    run_cmd_live_inner(child, pb)
+}
+
+fn run_cmd_live_inner(mut child: std::process::Child, pb: &ProgressBar) -> Result<Output> {
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
 

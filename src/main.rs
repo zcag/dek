@@ -310,15 +310,37 @@ fn run_remote(target: &str, cmd: &str, config_path: Option<PathBuf>, configs: &[
     output::print_header(&format!("{} on {}", cmd, target));
     println!();
 
-    let payload = RemotePayload::prepare(&config_abs)?;
-    let result = deploy_to_host(target, cmd, configs, &payload)?;
+    // Prepare config (artifacts + includes)
+    let dek_config = config::load(&config_path)?;
+    let prepared_config = prepare_config(&config_abs, &dek_config)?;
+    let prepared_abs = std::fs::canonicalize(&prepared_config)?;
+
+    let payload = RemotePayload::prepare(&prepared_abs)?;
+
+    // Show payload sizes
+    let config_size = std::fs::metadata(&payload.local_tar).map(|m| m.len()).unwrap_or(0);
+    let bin_size = std::fs::metadata(&payload.dek_binary).map(|m| m.len()).unwrap_or(0);
+    println!("  {} payload — config: {}, binary: {}",
+        c!("→", yellow),
+        output::format_bytes(config_size),
+        output::format_bytes(bin_size),
+    );
+    println!();
+
+    let result = deploy_to_host(target, cmd, configs, &payload, None)?;
     payload.cleanup();
 
+    // Print full remote output for single-host
     for line in result.output.lines() {
         println!("  {}", line);
     }
 
-    if !result.success {
+    let timing = format!("({})", output::format_duration(result.duration));
+    println!();
+    if result.success {
+        println!("{} done {}", c!("✓", green), c!(timing, dimmed));
+    } else {
+        println!("{} failed {}", c!("✗", red), c!(timing, dimmed));
         bail!("Remote command failed on {}", target);
     }
 
@@ -330,15 +352,29 @@ struct DeployResult {
     host: String,
     output: String,
     success: bool,
+    duration: std::time::Duration,
 }
 
-fn deploy_to_host(target: &str, cmd: &str, configs: &[String], payload: &RemotePayload) -> Result<DeployResult> {
+fn deploy_to_host(
+    target: &str, cmd: &str, configs: &[String], payload: &RemotePayload,
+    pb: Option<&indicatif::ProgressBar>,
+) -> Result<DeployResult> {
+    let start = std::time::Instant::now();
     let remote_dir = "/tmp/dek-remote";
     let remote_bin = format!("{}/dek", remote_dir);
     let remote_config = format!("{}/config.tar.gz", remote_dir);
     let mut log = String::new();
 
+    let update = |msg: &str| {
+        if let Some(pb) = pb {
+            pb.set_message(msg.to_string());
+        } else {
+            println!("  {} {}", c!("→", yellow), msg);
+        }
+    };
+
     // Setup remote dir + check if binary already exists with same hash
+    update("connecting...");
     let check_cmd = format!(
         "mkdir -p {} && if [ -f {} ]; then md5sum {} | cut -d' ' -f1; fi",
         remote_dir, remote_bin, remote_bin
@@ -354,7 +390,7 @@ fn deploy_to_host(target: &str, cmd: &str, configs: &[String], payload: &RemoteP
 
     // Copy binary only if hash differs
     if remote_hash != payload.bin_hash {
-        log.push_str("  binary: updated\n");
+        update("uploading binary...");
         let scp_bin = Command::new("scp")
             .args(["-q", &payload.dek_binary.to_string_lossy(), &format!("{}:{}", target, remote_bin)])
             .status()?;
@@ -362,10 +398,11 @@ fn deploy_to_host(target: &str, cmd: &str, configs: &[String], payload: &RemoteP
             bail!("Failed to copy dek binary to {}", target);
         }
     } else {
-        log.push_str("  binary: cached\n");
+        update("binary cached");
     }
 
     // Copy config
+    update("uploading config...");
     let scp_config = Command::new("scp")
         .args(["-q", &payload.local_tar, &format!("{}:{}", target, remote_config)])
         .status()?;
@@ -374,6 +411,7 @@ fn deploy_to_host(target: &str, cmd: &str, configs: &[String], payload: &RemoteP
     }
 
     // Run dek on remote
+    update(&format!("running {}...", cmd));
     let config_arg = format!("-C {}", remote_config);
     let configs_arg = configs.join(" ");
     let remote_cmd = format!("{} -q {} {} {}", remote_bin, cmd, config_arg, configs_arg);
@@ -393,6 +431,7 @@ fn deploy_to_host(target: &str, cmd: &str, configs: &[String], payload: &RemoteP
         host: target.to_string(),
         output: log,
         success: output.status.success(),
+        duration: start.elapsed(),
     })
 }
 
@@ -430,10 +469,8 @@ fn run_remotes(pattern: &str, cmd: &str, config_path: Option<PathBuf>, configs: 
         .unwrap_or_default();
 
     // Show plan
-    println!("{} {} on {} host(s):", c!("::", blue), cmd, matched.len());
-    for host in &matched {
-        println!("  {}", host);
-    }
+    let host_list: Vec<&str> = matched.iter().map(|h| h.as_str()).collect();
+    println!("{} {} on {} host(s): {}", c!("::", blue), cmd, matched.len(), host_list.join(", "));
     if !local_cmds.is_empty() {
         println!();
         println!("{} Local commands to run first:", c!("::", blue));
@@ -484,54 +521,68 @@ fn run_remotes(pattern: &str, cmd: &str, config_path: Option<PathBuf>, configs: 
     let prepared_abs = std::fs::canonicalize(&prepared_config)?;
 
     // Create archive and compute binary hash once
-    println!("{} Preparing payload...", c!("::", blue));
     let payload = RemotePayload::prepare(&prepared_abs)?;
+
+    // Show payload sizes
+    let config_size = std::fs::metadata(&payload.local_tar).map(|m| m.len()).unwrap_or(0);
+    let bin_size = std::fs::metadata(&payload.dek_binary).map(|m| m.len()).unwrap_or(0);
+    println!("{} Payload ready — config: {}, binary: {}",
+        c!("::", blue),
+        output::format_bytes(config_size),
+        output::format_bytes(bin_size),
+    );
 
     // Deploy to all hosts in parallel
     let total = matched.len();
     println!("{} Deploying to {} hosts...\n", c!("::", blue), total);
     let start = std::time::Instant::now();
 
-    let (tx, rx) = std::sync::mpsc::channel::<Result<DeployResult>>();
+    let mp = indicatif::MultiProgress::new();
+    let spinners: Vec<_> = matched.iter()
+        .map(|host| output::start_deploy_spinner(&mp, host))
+        .collect();
+
+    let (tx, rx) = std::sync::mpsc::channel::<(usize, Result<DeployResult>)>();
 
     std::thread::scope(|s| {
-        for host in &matched {
+        for (i, host) in matched.iter().enumerate() {
             let tx = tx.clone();
             let payload = &payload;
             let configs = configs;
+            let pb = &spinners[i];
             s.spawn(move || {
-                let result = deploy_to_host(host, cmd, configs, payload);
-                let _ = tx.send(result);
+                let result = deploy_to_host(host, cmd, configs, payload, Some(pb));
+                let _ = tx.send((i, result));
             });
         }
         drop(tx);
 
-        // Print results as they arrive
-        let mut done = 0;
         let mut failed_hosts: Vec<String> = Vec::new();
-        for result in rx {
-            done += 1;
+        for (i, result) in rx {
+            let pb = &spinners[i];
             match result {
                 Ok(r) => {
-                    let icon = if r.success { format!("{}", c!("✓", green)) } else { format!("{}", c!("✗", red)) };
-                    println!("{} {} ({}/{})", icon, c!(r.host, bold), done, total);
-                    for line in r.output.lines() {
-                        println!("  {}", line);
-                    }
-                    if !r.success {
+                    let summary = output::extract_summary_line(&r.output)
+                        .unwrap_or_default();
+                    if r.success {
+                        output::finish_deploy_ok(pb, &r.host, &summary, r.duration);
+                    } else {
+                        let err = output::extract_summary_line(&r.output)
+                            .unwrap_or_else(|| "failed".to_string());
+                        output::finish_deploy_fail(pb, &r.host, &err, r.duration);
                         failed_hosts.push(r.host);
                     }
                 }
                 Err(e) => {
-                    println!("{} error: {} ({}/{})", c!("✗", red), e, done, total);
-                    failed_hosts.push("?".into());
+                    output::finish_deploy_fail(pb, matched[i], &e.to_string(), start.elapsed());
+                    failed_hosts.push(matched[i].clone());
                 }
             }
         }
 
         // Summary
         let elapsed = start.elapsed();
-        let timing = format!("({:.1}s)", elapsed.as_secs_f64());
+        let timing = format!("({})", output::format_duration(elapsed));
         let succeeded = total - failed_hosts.len();
         println!();
         if failed_hosts.is_empty() {
@@ -636,14 +687,13 @@ pub(crate) fn prepare_config(config_path: &std::path::Path, dek_config: &config:
             };
 
             if should_build {
-                println!("  {} {}", c!("→", yellow), label);
-                let status = Command::new("sh")
-                    .arg("-c").arg(&artifact.build).current_dir(base_dir)
-                    .stdin(Stdio::inherit()).stdout(Stdio::inherit()).stderr(Stdio::inherit())
-                    .status()?;
-                if !status.success() {
+                let pb = output::start_artifact_spinner(label);
+                let result = util::run_cmd_live_dir("sh", &["-c", &artifact.build], &pb, base_dir)?;
+                if !result.status.success() {
+                    output::finish_artifact_fail(&pb, label, "build failed");
                     bail!("Artifact build failed: {}", label);
                 }
+                output::finish_artifact_ok(&pb, label);
                 // Update watch cache after successful build
                 if !artifact.watch.is_empty() {
                     artifact_watch_save(base_dir, artifact);

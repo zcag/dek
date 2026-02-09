@@ -1,9 +1,9 @@
 use crate::providers::{CheckResult, StateItem};
-use indicatif::ProgressBar;
+use indicatif::{MultiProgress, ProgressBar};
 use owo_colors::OwoColorize;
 use std::time::Duration;
 
-fn format_duration(d: Duration) -> String {
+pub fn format_duration(d: Duration) -> String {
     let secs = d.as_secs();
     if secs >= 60 {
         format!("{}m{}s", secs / 60, secs % 60)
@@ -202,4 +202,80 @@ pub fn finish_spinner_done(pb: &ProgressBar, item: &StateItem) {
 pub fn finish_spinner_fail(pb: &ProgressBar, item: &StateItem, err: &str) {
     pb.finish_and_clear();
     print_apply_fail(item, err);
+}
+
+pub fn format_bytes(bytes: u64) -> String {
+    if bytes >= 1_048_576 {
+        format!("{:.1}M", bytes as f64 / 1_048_576.0)
+    } else if bytes >= 1024 {
+        format!("{}K", bytes / 1024)
+    } else {
+        format!("{}B", bytes)
+    }
+}
+
+/// Find last line starting with a status icon from remote dek output
+pub fn extract_summary_line(output: &str) -> Option<String> {
+    // Strip ANSI escape sequences for matching
+    let ansi_re = regex::Regex::new(r"\x1b\[[0-9;]*m").unwrap();
+    output.lines().rev().find_map(|line| {
+        let clean = ansi_re.replace_all(line.trim(), "");
+        if clean.starts_with('✓') || clean.starts_with('✗') || clean.starts_with('→') {
+            Some(line.trim().to_string())
+        } else {
+            None
+        }
+    })
+}
+
+pub fn start_deploy_spinner(mp: &MultiProgress, host: &str) -> ProgressBar {
+    let pb = mp.add(ProgressBar::new_spinner());
+    pb.set_style(
+        indicatif::ProgressStyle::default_spinner()
+            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+            .template("  {spinner:.cyan} {prefix:.bold}  {msg:.dim}")
+            .unwrap(),
+    );
+    pb.set_prefix(host.to_string());
+    pb.enable_steady_tick(Duration::from_millis(80));
+    pb
+}
+
+pub fn finish_deploy_ok(pb: &ProgressBar, host: &str, summary: &str, duration: Duration) {
+    pb.set_style(indicatif::ProgressStyle::default_spinner().template("  {prefix}  {msg}").unwrap());
+    pb.set_prefix(format!("{} {}", c!("✓", green), c!(host, bold)));
+    let timing = format!("({})", format_duration(duration));
+    pb.finish_with_message(format!("{} {}", summary, c!(timing, dimmed)));
+}
+
+pub fn finish_deploy_fail(pb: &ProgressBar, host: &str, err: &str, duration: Duration) {
+    pb.set_style(indicatif::ProgressStyle::default_spinner().template("  {prefix}  {msg}").unwrap());
+    pb.set_prefix(format!("{} {}", c!("✗", red), c!(host, bold)));
+    let timing = format!("({})", format_duration(duration));
+    pb.finish_with_message(format!("{} {}", c!(err, red), c!(timing, dimmed)));
+}
+
+pub fn start_artifact_spinner(label: &str) -> ProgressBar {
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        indicatif::ProgressStyle::default_spinner()
+            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+            .template("  {spinner:.cyan} {prefix}  {msg:.dim}")
+            .unwrap(),
+    );
+    pb.set_prefix(format!("{} {}", c!("→", yellow), label));
+    pb.enable_steady_tick(Duration::from_millis(80));
+    pb
+}
+
+pub fn finish_artifact_ok(pb: &ProgressBar, label: &str) {
+    pb.set_style(indicatif::ProgressStyle::default_spinner().template("  {prefix}").unwrap());
+    pb.set_prefix(format!("{} {}", c!("✓", green), label));
+    pb.finish();
+}
+
+pub fn finish_artifact_fail(pb: &ProgressBar, label: &str, err: &str) {
+    pb.set_style(indicatif::ProgressStyle::default_spinner().template("  {prefix}  {msg}").unwrap());
+    pb.set_prefix(format!("{} {}", c!("✗", red), label));
+    pb.finish_with_message(format!("{}", c!(err, red)));
 }
