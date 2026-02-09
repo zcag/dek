@@ -185,6 +185,12 @@ pub struct RunConfig {
     /// Run locally before remote deployment (with --remotes)
     #[serde(default)]
     pub local: bool,
+    /// Allocate TTY for ssh (ssh -t), only with -t, rejects -r
+    #[serde(default)]
+    pub tty: bool,
+    /// Prompt before running
+    #[serde(default)]
+    pub confirm: bool,
 }
 
 /// Info about a config file (for listing)

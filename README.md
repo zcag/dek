@@ -208,6 +208,14 @@ cmd = "rsync -av ./dist/ server:/var/www/"
 [run.backup]
 description = "Backup database"
 script = "scripts/backup.sh"  # relative to config dir
+
+[run.restart]
+cmd = "systemctl restart myapp"
+confirm = true                 # prompt before running
+
+[run.logs]
+cmd = "journalctl -fu myapp"
+tty = true                     # interactive, uses ssh -t
 ```
 
 ```bash
@@ -215,6 +223,20 @@ dek run              # list available commands
 dek run deploy       # run command
 dek run backup arg1  # args passed via $@
 ```
+
+### Remote Run
+
+Run commands on remote hosts without deploying dek — just SSH the command directly:
+
+```bash
+dek run restart -t server1        # single host
+dek run restart -r 'app-*'        # multi-host (parallel)
+dek run logs -t server1           # tty command (interactive)
+```
+
+- **`-t`** — single host, prints output directly. With `tty: true`, uses `ssh -t` for interactive commands.
+- **`-r`** — multi-host from inventory, runs in parallel with progress spinners. `tty: true` commands are rejected (can't attach TTY to multiple hosts).
+- **`confirm: true`** — prompts `[y/N]` before running (works both locally and remotely).
 
 ## Remote
 

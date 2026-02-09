@@ -194,7 +194,13 @@ fn main() -> Result<()> {
                 run_list(config)
             }
         }
-        Some(Commands::Run { name, args }) => run_command(config, name, args),
+        Some(Commands::Run { name, args }) => {
+            if remotes.is_some() || target.is_some() {
+                run_command_remote(config, name, args, target, remotes)
+            } else {
+                run_command(config, name, args)
+            }
+        }
         Some(Commands::Test { image, keep }) => run_test(config, image, keep),
         Some(Commands::Bake { config: bake_config, output }) => {
             bake::run(bake_config.or(config), output)
@@ -889,6 +895,219 @@ fn print_config_entry(cfg: &config::ConfigInfo) {
     }
 }
 
+fn run_command_remote(
+    config_path: Option<PathBuf>, name: Option<String>, args: Vec<String>,
+    target: Option<String>, remotes: Option<String>,
+) -> Result<()> {
+    use std::io::{self, Write};
+
+    let path = resolve_config(config_path)?;
+    let resolved_path = config::resolve_path(&path)?;
+    let cfg = config::load(&resolved_path)?;
+
+    // If no name, list available commands
+    let name = match name {
+        Some(n) => n,
+        None => {
+            let commands = cfg.run.as_ref();
+            if commands.is_none() || commands.unwrap().is_empty() {
+                println!("No run commands defined in config");
+                return Ok(());
+            }
+            output::print_header("Run Commands");
+            println!();
+            let mut cmds: Vec<_> = commands.unwrap().iter().collect();
+            cmds.sort_by_key(|(k, _)| *k);
+            for (cmd_name, cmd_config) in cmds {
+                if let Some(ref desc) = cmd_config.description {
+                    println!("  {} - {}", c!(cmd_name, bold), c!(desc, dimmed));
+                } else {
+                    println!("  {}", c!(cmd_name, bold));
+                }
+            }
+            return Ok(());
+        }
+    };
+
+    let run_config = cfg.run.as_ref()
+        .and_then(|r| r.get(&name))
+        .ok_or_else(|| anyhow::anyhow!("Command '{}' not found in config", name))?;
+
+    // Resolve the shell command
+    let base_dir = if resolved_path.is_file() {
+        resolved_path.parent().unwrap_or(std::path::Path::new(".")).to_path_buf()
+    } else {
+        resolved_path.clone()
+    };
+
+    let shell_cmd = if let Some(ref cmd) = run_config.cmd {
+        cmd.clone()
+    } else if let Some(ref script_path) = run_config.script {
+        let full_path = base_dir.join(script_path);
+        std::fs::read_to_string(&full_path)
+            .map_err(|e| anyhow::anyhow!("Failed to read script '{}': {}", full_path.display(), e))?
+    } else {
+        bail!("Command '{}' has no cmd or script for remote execution", name);
+    };
+
+    // Append extra args
+    let full_cmd = if args.is_empty() {
+        shell_cmd
+    } else {
+        format!("{} {}", shell_cmd, args.join(" "))
+    };
+
+    // Resolve hosts
+    let hosts: Vec<String> = if let Some(ref t) = target {
+        vec![t.clone()]
+    } else if let Some(ref pattern) = remotes {
+        let inventory = config::load_inventory(&path)
+            .ok_or_else(|| anyhow::anyhow!("No inventory.ini found in config directory"))?;
+        if inventory.hosts.is_empty() {
+            bail!("No hosts defined in inventory");
+        }
+        let regex_pattern = format!("^{}$", pattern.replace("*", ".*"));
+        let re = regex::Regex::new(&regex_pattern)
+            .map_err(|e| anyhow::anyhow!("Invalid pattern '{}': {}", pattern, e))?;
+        let matched: Vec<String> = inventory.hosts.iter().filter(|h| re.is_match(h)).cloned().collect();
+        if matched.is_empty() {
+            bail!("No hosts match pattern '{}'", pattern);
+        }
+        matched
+    } else {
+        unreachable!()
+    };
+
+    // tty + -r → bail
+    if run_config.tty && remotes.is_some() {
+        bail!("Command '{}' requires tty (ssh -t) and cannot be used with --remotes", name);
+    }
+
+    // Confirm
+    if run_config.confirm {
+        let target_desc = if hosts.len() == 1 {
+            hosts[0].clone()
+        } else {
+            format!("{} hosts ({})", hosts.len(), hosts.join(", "))
+        };
+        print!("Run {} on {}? [y/N] ", c!(&name, bold), target_desc);
+        io::stdout().flush()?;
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("Aborted");
+            return Ok(());
+        }
+    }
+
+    // Single host (-t)
+    if target.is_some() {
+        let host = &hosts[0];
+        if run_config.tty {
+            // ssh -t with inherited stdio
+            let status = Command::new("ssh")
+                .args(["-t", host, &full_cmd])
+                .stdin(Stdio::inherit())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .status()?;
+            if !status.success() {
+                bail!("Command '{}' failed on {}", name, host);
+            }
+        } else {
+            let output = Command::new("ssh")
+                .args([host.as_str(), &full_cmd])
+                .output()?;
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !stdout.is_empty() {
+                print!("{}", stdout);
+            }
+            if !stderr.is_empty() {
+                eprint!("{}", stderr);
+            }
+            if !output.status.success() {
+                bail!("Command '{}' failed on {}", name, host);
+            }
+        }
+        return Ok(());
+    }
+
+    // Multi-host (-r) — parallel with spinners
+    let total = hosts.len();
+    println!("{} Running '{}' on {} host(s)...\n", c!("::", blue), name, total);
+    let start = std::time::Instant::now();
+
+    let mp = indicatif::MultiProgress::new();
+    let spinners: Vec<_> = hosts.iter()
+        .map(|host| output::start_deploy_spinner(&mp, host))
+        .collect();
+
+    let (tx, rx) = std::sync::mpsc::channel::<(usize, String, bool, std::time::Duration)>();
+
+    std::thread::scope(|s| {
+        for (i, host) in hosts.iter().enumerate() {
+            let tx = tx.clone();
+            let cmd = &full_cmd;
+            let pb = &spinners[i];
+            s.spawn(move || {
+                let t = std::time::Instant::now();
+                pb.set_message("running...");
+                let result = Command::new("ssh")
+                    .args([host.as_str(), cmd])
+                    .output();
+                let elapsed = t.elapsed();
+                match result {
+                    Ok(out) => {
+                        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+                        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                        let combined = if stderr.is_empty() { stdout } else { format!("{}{}", stdout, stderr) };
+                        let _ = tx.send((i, combined, out.status.success(), elapsed));
+                    }
+                    Err(e) => {
+                        let _ = tx.send((i, e.to_string(), false, elapsed));
+                    }
+                }
+            });
+        }
+        drop(tx);
+
+        let mut failed_hosts: Vec<String> = Vec::new();
+        for (i, output_text, success, elapsed) in rx {
+            let pb = &spinners[i];
+            let host = &hosts[i];
+            let summary = output_text.lines().last().unwrap_or("").trim().to_string();
+            if success {
+                output::finish_deploy_ok(pb, host, &summary, elapsed);
+            } else {
+                let err = if summary.is_empty() { "failed".to_string() } else { summary };
+                output::finish_deploy_fail(pb, host, &err, elapsed);
+                failed_hosts.push(host.clone());
+            }
+        }
+
+        // Summary
+        let elapsed = start.elapsed();
+        let timing = format!("({})", output::format_duration(elapsed));
+        let succeeded = total - failed_hosts.len();
+        println!();
+        if failed_hosts.is_empty() {
+            println!("{} {}/{} hosts completed {}", c!("✓", green), succeeded, total, c!(timing, dimmed));
+        } else {
+            println!("{} {}/{} hosts completed, {} failed {}", c!("!", yellow), succeeded, total, failed_hosts.len(), c!(timing, dimmed));
+            for h in &failed_hosts {
+                println!("  {} {}", c!("✗", red), h);
+            }
+        }
+
+        if !failed_hosts.is_empty() {
+            std::process::exit(1);
+        }
+    });
+
+    Ok(())
+}
+
 fn run_command(config_path: Option<PathBuf>, name: Option<String>, args: Vec<String>) -> Result<()> {
     use std::process::Command;
 
@@ -930,6 +1149,19 @@ fn run_command(config_path: Option<PathBuf>, name: Option<String>, args: Vec<Str
     let run_config = config.run.as_ref()
         .and_then(|r| r.get(&name))
         .ok_or_else(|| anyhow::anyhow!("Command '{}' not found in config", name))?;
+
+    // Confirm
+    if run_config.confirm {
+        use std::io::{self, Write};
+        print!("Run {}? [y/N] ", c!(&name, bold));
+        io::stdout().flush()?;
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("Aborted");
+            return Ok(());
+        }
+    }
 
     // Install dependencies first
     if !run_config.deps.is_empty() {
