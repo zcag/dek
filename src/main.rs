@@ -98,13 +98,25 @@ enum Commands {
     },
     /// Spin up container, apply config, drop into shell
     Test {
-        /// Base image (default: archlinux)
-        #[arg(short, long, default_value = "archlinux")]
-        image: String,
-
-        /// Keep container after exit
+        /// Base image (default: meta.toml [test].image or "archlinux")
         #[arg(short, long)]
-        keep: bool,
+        image: Option<String>,
+
+        /// Remove container after exit (default: keep)
+        #[arg(long)]
+        rm: bool,
+
+        /// Force new container (remove existing, rebake)
+        #[arg(long)]
+        fresh: bool,
+
+        /// Attach to existing container
+        #[arg(long)]
+        attach: bool,
+
+        /// Configs/selectors to apply (e.g., "tools", "@core")
+        #[arg(value_name = "SELECTORS")]
+        selectors: Vec<String>,
     },
     /// Bake config into standalone binary
     Bake {
@@ -209,7 +221,7 @@ fn main() -> Result<()> {
                 run_command(config, name, args)
             }
         }
-        Some(Commands::Test { image, keep }) => run_test(config, image, keep),
+        Some(Commands::Test { image, rm, fresh, attach, selectors }) => run_test(config, image, rm, fresh, attach, selectors),
         Some(Commands::Bake { config: bake_config, output }) => {
             bake::run(bake_config.or(config), output)
         }
@@ -302,11 +314,7 @@ fn run_mode(mode: runner::Mode, config_path: Option<PathBuf>, configs: Vec<Strin
         println!();
     }
 
-    let config = if configs.is_empty() {
-        config::load(&resolved_path)?
-    } else {
-        config::load_selected(&resolved_path, &configs)?
-    };
+    let config = config::load_for_apply(&resolved_path, &configs, meta.as_ref())?;
 
     // Resolve artifacts (build outputs) before running.
     // Skip when --prepared (rsync remote deploy) or tarball (bake).
@@ -890,27 +898,28 @@ fn dir_size(path: &std::path::Path) -> u64 {
 
 fn run_list(config_path: Option<PathBuf>) -> Result<()> {
     let path = resolve_config(config_path)?;
-    let configs = config::list_configs(&path)?;
+    let meta = config::load_meta(&path);
+    let configs = config::list_configs(&path, meta.as_ref())?;
 
     if configs.is_empty() {
         println!("No config files found");
         return Ok(());
     }
 
-    let (main_configs, optional_configs): (Vec<_>, Vec<_>) =
-        configs.into_iter().partition(|c| !c.optional);
+    let (default_configs, other_configs): (Vec<_>, Vec<_>) =
+        configs.into_iter().partition(|c| c.is_default);
 
-    output::print_header("Available configs");
+    output::print_header("Default configs");
     println!();
-    for cfg in &main_configs {
+    for cfg in &default_configs {
         print_config_entry(cfg);
     }
 
-    if !optional_configs.is_empty() {
+    if !other_configs.is_empty() {
         println!();
-        output::print_header("Optional configs");
+        output::print_header("Other configs");
         println!();
-        for cfg in &optional_configs {
+        for cfg in &other_configs {
             print_config_entry(cfg);
         }
     }
@@ -936,6 +945,12 @@ fn print_config_entry(cfg: &config::ConfigInfo) {
         cfg.key.clone()
     };
 
+    let labels_str = if cfg.labels.is_empty() {
+        String::new()
+    } else {
+        format!(" [{}]", cfg.labels.iter().map(|l| format!("@{}", l)).collect::<Vec<_>>().join(" "))
+    };
+
     if skipped {
         let desc = cfg.description.as_deref().unwrap_or("");
         let suffix = if desc.is_empty() {
@@ -943,12 +958,16 @@ fn print_config_entry(cfg: &config::ConfigInfo) {
         } else {
             format!("{} (skipped)", desc)
         };
-        println!("  {} - {}", c!(label, dimmed), c!(suffix, dimmed));
+        print!("  {} - {}", c!(label, dimmed), c!(suffix, dimmed));
     } else if let Some(ref d) = cfg.description {
-        println!("  {} - {}", c!(label, green), c!(d, dimmed));
+        print!("  {} - {}", c!(label, green), c!(d, dimmed));
     } else {
-        println!("  {}", c!(label, green));
+        print!("  {}", c!(label, green));
     }
+    if !labels_str.is_empty() {
+        print!(" {}", c!(labels_str, dimmed));
+    }
+    println!();
 }
 
 fn run_command_remote(
@@ -959,7 +978,7 @@ fn run_command_remote(
 
     let path = resolve_config(config_path)?;
     let resolved_path = config::resolve_path(&path)?;
-    let cfg = config::load(&resolved_path)?;
+    let cfg = config::load_all(&resolved_path)?;
 
     // If no name, list available commands
     let name = match name {
@@ -1169,7 +1188,7 @@ fn run_command(config_path: Option<PathBuf>, name: Option<String>, args: Vec<Str
 
     let path = resolve_config(config_path)?;
     let resolved_path = config::resolve_path(&path)?;
-    let config = config::load(&resolved_path)?;
+    let config = config::load_all(&resolved_path)?;
 
     // If no name provided, list available commands
     let name = match name {
@@ -1310,20 +1329,80 @@ fn run_inline(specs: &[String]) -> Result<()> {
     runner.run_items(&items?)
 }
 
-fn run_test(config_path: Option<PathBuf>, image: String, keep: bool) -> Result<()> {
-    // Check docker is available
+fn run_test(
+    config_path: Option<PathBuf>, image: Option<String>, rm: bool,
+    fresh: bool, attach: bool, selectors: Vec<String>,
+) -> Result<()> {
     if which::which("docker").is_err() {
         bail!("docker not found in PATH");
     }
 
     let config_path = resolve_config(config_path)?;
-    let config_abs = std::fs::canonicalize(&config_path)?;
-    let cwd = std::env::current_dir()?;
+    let resolved_path = config::resolve_path(&config_path)?;
+    let meta = config::load_meta(&resolved_path);
+    let test_config = meta.as_ref().and_then(|m| m.test.as_ref());
 
-    output::print_header(&format!("Testing {} in {}", config_path.display(), image));
+    // Derive image: CLI > meta.toml > "archlinux"
+    let image = image
+        .or_else(|| test_config.and_then(|t| t.image.clone()))
+        .unwrap_or_else(|| "archlinux".to_string());
+
+    // Derive keep: --rm overrides, else meta.toml, else true
+    let keep = if rm { false } else {
+        test_config.and_then(|t| t.keep).unwrap_or(true)
+    };
+
+    // Container name from config identity
+    let config_name = meta.as_ref().and_then(|m| m.name.as_deref())
+        .unwrap_or_else(|| {
+            resolved_path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("dek")
+        });
+    let sanitized: String = config_name.to_lowercase().chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let container_name = format!("dek-test-{}", sanitized.trim_matches('-'));
+
+    // Check existing container state
+    let container_state = get_container_state(&container_name);
+
+    // --attach: just attach to existing
+    if attach {
+        match container_state.as_deref() {
+            Some("running") => return docker_attach(&container_name),
+            Some(_) => {
+                docker_start(&container_name)?;
+                return docker_attach(&container_name);
+            }
+            None => bail!("No container '{}' to attach to", container_name),
+        }
+    }
+
+    // Handle existing container
+    if let Some(ref state) = container_state {
+        if fresh {
+            println!("  {} Removing old container...", c!("→", yellow));
+            let _ = Command::new("docker").args(["rm", "-f", &container_name])
+                .stdout(Stdio::null()).stderr(Stdio::null()).status();
+        } else if state == "running" {
+            output::print_header(&format!("Attaching to {}", container_name));
+            println!();
+            return docker_attach(&container_name);
+        } else {
+            // stopped container — restart it
+            output::print_header(&format!("Restarting {}", container_name));
+            println!();
+            docker_start(&container_name)?;
+            return docker_attach(&container_name);
+        }
+    }
+
+    output::print_header(&format!("Testing in {}", image));
     println!();
 
-    // Get dek binary - use current exe if baked, otherwise build from source
+    // Build dek binary
+    let cwd = std::env::current_dir()?;
     let dek_binary = if cwd.join("Cargo.toml").exists() {
         println!("  {} Building dek...", c!("→", yellow));
         let build_status = Command::new("cargo")
@@ -1332,20 +1411,23 @@ fn run_test(config_path: Option<PathBuf>, image: String, keep: bool) -> Result<(
         if !build_status.success() {
             bail!("cargo build failed");
         }
-        let binary = cwd.join("target/release/dek");
-        if !binary.exists() {
-            bail!("dek binary not found at {}", binary.display());
-        }
-        binary
+        cwd.join("target/release/dek")
     } else {
         std::env::current_exe()?
     };
 
+    // Prepare config (artifacts + includes)
+    let dek_config = config::load_all(&resolved_path)?;
+    let prepared_path = prepare_config(&resolved_path, &dek_config)?;
+
+    // Bake into standalone binary
+    let baked_path = PathBuf::from(format!("/tmp/{}", container_name));
+    println!("  {} Baking config into binary...", c!("→", yellow));
+    bake::create_baked_binary(&prepared_path, &dek_binary, &baked_path)?;
+
     // Build docker args
-    let container_name = format!("dek-test-{}", std::process::id());
     let mut args = vec!["run".to_string()];
 
-    // Only use -it if we have a TTY
     use std::io::IsTerminal;
     if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
         args.push("-it".to_string());
@@ -1358,44 +1440,31 @@ fn run_test(config_path: Option<PathBuf>, image: String, keep: bool) -> Result<(
         args.push("--rm".to_string());
     }
 
-    // Mount dek binary
+    // Mount only the baked binary
     args.push("-v".to_string());
-    args.push(format!("{}:/usr/local/bin/dek:ro", dek_binary.display()));
-
-    // Mount current directory
-    args.push("-v".to_string());
-    args.push(format!("{}:/workspace", cwd.display()));
-
-    // Mount config if it's outside cwd
-    if !config_abs.starts_with(&cwd) {
-        args.push("-v".to_string());
-        args.push(format!("{}:/config:ro", config_abs.display()));
-    }
+    args.push(format!("{}:/usr/local/bin/dek:ro", baked_path.display()));
 
     args.push("-w".to_string());
-    args.push("/workspace".to_string());
+    args.push("/root".to_string());
 
     args.push(image);
 
-    // Config path inside container
-    let config_in_container = if config_abs.starts_with(&cwd) {
-        format!("/workspace/{}", config_path.display())
+    // Inner command: apply selectors then drop to shell
+    let apply_args = if selectors.is_empty() {
+        "dek apply".to_string()
     } else {
-        "/config".to_string()
+        format!("dek apply {}", selectors.join(" "))
     };
-
-    // Run shell with dek apply (always drop into shell even if apply fails)
     args.push("sh".to_string());
     args.push("-c".to_string());
     args.push(format!(
-        r#"dek apply -C {}; echo ""; echo "Dropping into shell..."; exec bash -l"#,
-        config_in_container
+        r#"{}; echo ""; echo "Dropping into shell..."; exec bash -l 2>/dev/null || exec sh"#,
+        apply_args
     ));
 
     println!("  {} Starting container...", c!("→", yellow));
     println!();
 
-    // Run docker
     let status = Command::new("docker")
         .args(&args)
         .stdin(Stdio::inherit())
@@ -1403,17 +1472,65 @@ fn run_test(config_path: Option<PathBuf>, image: String, keep: bool) -> Result<(
         .stderr(Stdio::inherit())
         .status()?;
 
-    if !status.success() {
-        bail!("docker exited with status {}", status);
+    if !status.success() && keep {
+        // Container may have been created even if the command failed
     }
 
     if keep {
         println!();
-        println!("Container kept: {}", container_name);
-        println!("  docker start -ai {}", container_name);
-        println!("  docker rm {}", container_name);
+        println!("Container kept: {}", c!(container_name, bold));
+        println!("  Reattach:  {}", c!(format!("dek test"), dimmed));
+        println!("  Fresh:     {}", c!(format!("dek test --fresh"), dimmed));
+        println!("  Remove:    {}", c!(format!("docker rm {}", container_name), dimmed));
     }
 
+    Ok(())
+}
+
+fn get_container_state(name: &str) -> Option<String> {
+    let output = Command::new("docker")
+        .args(["inspect", "-f", "{{.State.Status}}", name])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let state = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if state.is_empty() { None } else { Some(state) }
+}
+
+fn docker_start(name: &str) -> Result<()> {
+    let status = Command::new("docker")
+        .args(["start", name])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .status()?;
+    if !status.success() {
+        bail!("Failed to start container '{}'", name);
+    }
+    Ok(())
+}
+
+fn docker_attach(name: &str) -> Result<()> {
+    let status = Command::new("docker")
+        .args(["exec", "-it", name, "bash", "-l"])
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .or_else(|_| {
+            Command::new("docker")
+                .args(["exec", "-it", name, "sh"])
+                .stdin(Stdio::inherit())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .status()
+        })?;
+    if !status.success() {
+        bail!("docker exec exited with status {}", status);
+    }
     Ok(())
 }
 
@@ -1494,8 +1611,8 @@ fn print_rich_help(meta: Option<&config::Meta>, config_path: &PathBuf) -> Result
         .unwrap_or_else(|| "dek".to_string());
 
     let name = meta.and_then(|m| m.name.as_deref()).unwrap_or(&exe_name);
-    let cfg = config::load(config_path)?;
-    let configs = config::list_configs(config_path)?;
+    let cfg = config::load_all(config_path)?;
+    let configs = config::list_configs(config_path, meta)?;
 
     // Banner or header
     if let Some(banner) = meta.and_then(|m| m.banner.as_ref()) {
@@ -1550,16 +1667,30 @@ fn print_rich_help(meta: Option<&config::Meta>, config_path: &PathBuf) -> Result
     if !configs.is_empty() {
         println!("  {}", c!("CONFIGS", dimmed));
         for cfg_info in &configs {
+            let marker = if cfg_info.is_default { "* " } else { "  " };
             let label = if cfg_info.name != cfg_info.key {
                 format!("{} ({})", cfg_info.key, cfg_info.name)
             } else {
                 cfg_info.key.clone()
             };
-            if let Some(d) = &cfg_info.description {
-                println!("    {}  {}", c!(label, green), c!(d, dimmed));
+            let labels_str = if cfg_info.labels.is_empty() {
+                String::new()
             } else {
-                println!("    {}", c!(label, green));
+                format!(" [{}]", cfg_info.labels.iter().map(|l| format!("@{}", l)).collect::<Vec<_>>().join(" "))
+            };
+            let desc = cfg_info.description.as_deref().unwrap_or("");
+            if cfg_info.is_default {
+                print!("    {}", c!(format!("{}{}", marker, label), green));
+            } else {
+                print!("    {}{}", marker, c!(label, white));
             }
+            if !labels_str.is_empty() {
+                print!(" {}", c!(labels_str, dimmed));
+            }
+            if !desc.is_empty() {
+                print!("  {}", c!(desc, dimmed));
+            }
+            println!();
         }
         println!();
     }

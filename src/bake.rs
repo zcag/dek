@@ -81,47 +81,21 @@ pub fn get_bake_info() -> Option<String> {
     Some(format!("Baked on {} by {}", timestamp, user_host))
 }
 
-/// Bake a config path into a standalone binary
-pub fn run(config_path: Option<PathBuf>, output: PathBuf) -> Result<()> {
-    let config_path = config_path
-        .or_else(|| crate::config::find_default_config())
-        .ok_or_else(|| anyhow::anyhow!("No config found"))?;
-
-    println!("{}", c!("Baking", bold));
-    println!();
-    println!("  {} Config: {}", c!("•", blue), config_path.display());
-    println!("  {} Output: {}", c!("•", blue), output.display());
-    println!();
-
-    // Handle tar.gz input - extract first, then re-tarball
-    let actual_path = if crate::util::is_tar_gz(&config_path) {
-        println!("  {} Extracting archive...", c!("→", yellow));
-        crate::util::extract_tar_gz(&config_path)?
-    } else {
-        config_path
-    };
-
-    // Resolve artifacts + includes before archiving
-    let dek_config = crate::config::load(&actual_path)?;
-    let prepared_path = crate::prepare_config(&actual_path, &dek_config)?;
-
-    // Create tarball of the prepared config
-    println!("  {} Creating archive...", c!("→", yellow));
-    let tar_data = create_tarball(&prepared_path)?;
+/// Bake a prepared config directory into a standalone binary.
+/// base_binary: the dek executable to use as the base (release build or current_exe)
+/// output: where to write the baked binary
+pub fn create_baked_binary(prepared_path: &Path, base_binary: &Path, output: &Path) -> Result<()> {
+    let tar_data = create_tarball(prepared_path)?;
 
     // Hash for cache key
     let hash = format!("{:x}", md5::compute(&tar_data));
     let hash_short = &hash[..32.min(hash.len())];
 
-    // Get current exe
-    let exe = std::env::current_exe()?;
-
-    // Copy exe to output
-    println!("  {} Writing binary...", c!("→", yellow));
-    fs::copy(&exe, &output)?;
+    // Copy base binary to output
+    fs::copy(base_binary, output)?;
 
     // Append tar data and footer
-    let mut out_file = fs::OpenOptions::new().append(true).open(&output)?;
+    let mut out_file = fs::OpenOptions::new().append(true).open(output)?;
     out_file.write_all(&tar_data)?;
 
     // Build footer
@@ -155,10 +129,43 @@ pub fn run(config_path: Option<PathBuf>, output: PathBuf) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&output)?.permissions();
+        let mut perms = fs::metadata(output)?.permissions();
         perms.set_mode(0o755);
-        fs::set_permissions(&output, perms)?;
+        fs::set_permissions(output, perms)?;
     }
+
+    Ok(())
+}
+
+/// Bake a config path into a standalone binary
+pub fn run(config_path: Option<PathBuf>, output: PathBuf) -> Result<()> {
+    let config_path = config_path
+        .or_else(|| crate::config::find_default_config())
+        .ok_or_else(|| anyhow::anyhow!("No config found"))?;
+
+    println!("{}", c!("Baking", bold));
+    println!();
+    println!("  {} Config: {}", c!("•", blue), config_path.display());
+    println!("  {} Output: {}", c!("•", blue), output.display());
+    println!();
+
+    // Handle tar.gz input - extract first, then re-tarball
+    let actual_path = if crate::util::is_tar_gz(&config_path) {
+        println!("  {} Extracting archive...", c!("→", yellow));
+        crate::util::extract_tar_gz(&config_path)?
+    } else {
+        config_path
+    };
+
+    // Resolve artifacts + includes before archiving
+    let dek_config = crate::config::load_all(&actual_path)?;
+    let prepared_path = crate::prepare_config(&actual_path, &dek_config)?;
+
+    println!("  {} Creating archive...", c!("→", yellow));
+    println!("  {} Writing binary...", c!("→", yellow));
+
+    let exe = std::env::current_exe()?;
+    create_baked_binary(&prepared_path, &exe, &output)?;
 
     let size = fs::metadata(&output)?.len();
     println!("  {} Created {} ({})", c!("✓", green), output.display(), format_size(size));

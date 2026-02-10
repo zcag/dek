@@ -6,16 +6,124 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Load all configs from path (merges all .toml files if directory)
+/// Load configs from main directory only (no optional/)
 pub fn load<P: AsRef<Path>>(path: P) -> Result<Config> {
     load_filtered(path, None)
 }
 
-/// Load specific configs by key (e.g., "tools", "config")
-/// Key is derived from filename: "10-tools.toml" -> "tools"
-/// Also searches optional/ subdirectory when keys specified
-pub fn load_selected<P: AsRef<Path>>(path: P, keys: &[String]) -> Result<Config> {
-    load_filtered(path, Some(keys))
+/// Load all configs from main + optional/ directories (no filtering)
+pub fn load_all<P: AsRef<Path>>(path: P) -> Result<Config> {
+    let path = path.as_ref();
+
+    if crate::util::is_tar_gz(path) {
+        let extracted = crate::util::extract_tar_gz(path)?;
+        return load_all_from_dir(&extracted);
+    }
+
+    if path.is_dir() {
+        load_all_from_dir(path)
+    } else {
+        load_file(path)
+    }
+}
+
+/// Smart config loader for apply: resolves selectors (@labels + keys) and defaults
+pub fn load_for_apply<P: AsRef<Path>>(path: P, selectors: &[String], meta: Option<&Meta>) -> Result<Config> {
+    let path = path.as_ref();
+
+    // No selectors and no defaults → main dir only (backward compat)
+    let defaults = meta.map(|m| &m.defaults[..]).unwrap_or(&[]);
+    if selectors.is_empty() && defaults.is_empty() {
+        return load(path);
+    }
+
+    // Determine effective selectors
+    let effective: &[String] = if selectors.is_empty() { defaults } else { selectors };
+
+    let dir = if crate::util::is_tar_gz(path) {
+        crate::util::extract_tar_gz(path)?
+    } else if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        return load_file(path);
+    };
+
+    // Scan all entries (main + optional/)
+    let entries = scan_config_entries(&dir)?;
+
+    // Resolve selectors to keys
+    let resolved_keys = resolve_selectors(effective, &entries);
+
+    // Load only resolved keys from all dirs
+    let keys: Vec<String> = resolved_keys.into_iter().collect();
+    load_directory(&dir, Some(&keys))
+}
+
+/// Internal entry representing a scanned config file
+struct ConfigEntry {
+    key: String,
+    labels: Vec<String>,
+}
+
+/// Scan main + optional/ dirs for config entries with their labels
+fn scan_config_entries(dir: &Path) -> Result<Vec<ConfigEntry>> {
+    let mut entries = Vec::new();
+    scan_entries_from_dir(dir, &mut entries)?;
+    let optional_dir = dir.join("optional");
+    if optional_dir.is_dir() {
+        scan_entries_from_dir(&optional_dir, &mut entries)?;
+    }
+    Ok(entries)
+}
+
+fn scan_entries_from_dir(dir: &Path, entries: &mut Vec<ConfigEntry>) -> Result<()> {
+    for entry in get_config_entries(dir)? {
+        let key = file_key(&entry.path());
+        if key == "meta" {
+            continue;
+        }
+        let config = load_file(&entry.path())?;
+        let labels = config.meta.as_ref()
+            .map(|m| m.labels.clone())
+            .unwrap_or_default();
+        entries.push(ConfigEntry { key, labels });
+    }
+    Ok(())
+}
+
+/// Resolve selectors (@label refs and plain keys) to a set of config keys
+fn resolve_selectors(selectors: &[String], entries: &[ConfigEntry]) -> Vec<String> {
+    let mut keys = Vec::new();
+    for sel in selectors {
+        if let Some(label) = sel.strip_prefix('@') {
+            for entry in entries {
+                if entry.labels.iter().any(|l| l == label) && !keys.contains(&entry.key) {
+                    keys.push(entry.key.clone());
+                }
+            }
+        } else if !keys.contains(sel) {
+            keys.push(sel.clone());
+        }
+    }
+    keys
+}
+
+/// Check if a config is a default based on meta.defaults
+fn compute_is_default(key: &str, labels: &[String], optional: bool, meta: Option<&Meta>) -> bool {
+    let defaults = match meta {
+        Some(m) if !m.defaults.is_empty() => &m.defaults,
+        _ => return !optional,
+    };
+    for sel in defaults {
+        if let Some(label) = sel.strip_prefix('@') {
+            if labels.iter().any(|l| l == label) {
+                return true;
+            }
+        } else if sel == key {
+            return true;
+        }
+    }
+    false
 }
 
 fn load_filtered<P: AsRef<Path>>(path: P, filter_keys: Option<&[String]>) -> Result<Config> {
@@ -33,13 +141,23 @@ fn load_filtered<P: AsRef<Path>>(path: P, filter_keys: Option<&[String]>) -> Res
     }
 }
 
+fn load_all_from_dir(dir: &Path) -> Result<Config> {
+    let mut merged = Config::default();
+    load_from_dir(dir, None, &mut merged)?;
+    let optional_dir = dir.join("optional");
+    if optional_dir.is_dir() {
+        load_from_dir(&optional_dir, None, &mut merged)?;
+    }
+    Ok(merged)
+}
+
 /// List available config files with their metadata
-pub fn list_configs<P: AsRef<Path>>(path: P) -> Result<Vec<ConfigInfo>> {
+pub fn list_configs<P: AsRef<Path>>(path: P, meta: Option<&Meta>) -> Result<Vec<ConfigInfo>> {
     let path = path.as_ref();
 
     if crate::util::is_tar_gz(path) {
         let extracted = crate::util::extract_tar_gz(path)?;
-        return list_configs(&extracted);
+        return list_configs(&extracted, meta);
     }
 
     if !path.is_dir() {
@@ -47,30 +165,32 @@ pub fn list_configs<P: AsRef<Path>>(path: P) -> Result<Vec<ConfigInfo>> {
     }
 
     let mut configs = Vec::new();
-    list_configs_from_dir(path, false, &mut configs)?;
+    list_configs_from_dir(path, false, meta, &mut configs)?;
 
     let optional_dir = path.join("optional");
     if optional_dir.is_dir() {
-        list_configs_from_dir(&optional_dir, true, &mut configs)?;
+        list_configs_from_dir(&optional_dir, true, meta, &mut configs)?;
     }
 
     Ok(configs)
 }
 
-fn list_configs_from_dir(dir: &Path, optional: bool, configs: &mut Vec<ConfigInfo>) -> Result<()> {
+fn list_configs_from_dir(dir: &Path, optional: bool, meta: Option<&Meta>, configs: &mut Vec<ConfigInfo>) -> Result<()> {
     for entry in get_config_entries(dir)? {
         let key = file_key(&entry.path());
         if key == "meta" {
             continue;
         }
         let config = load_file(&entry.path())?;
-        let meta = config.meta.as_ref();
-        let name = meta
+        let cm = config.meta.as_ref();
+        let name = cm
             .and_then(|m| m.name.clone())
             .unwrap_or_else(|| key.clone());
-        let description = meta.and_then(|m| m.description.clone());
-        let run_if = meta.and_then(|m| m.run_if.clone());
-        configs.push(ConfigInfo { key, name, description, optional, run_if });
+        let description = cm.and_then(|m| m.description.clone());
+        let run_if = cm.and_then(|m| m.run_if.clone());
+        let labels = cm.map(|m| m.labels.clone()).unwrap_or_default();
+        let is_default = compute_is_default(&key, &labels, optional, meta);
+        configs.push(ConfigInfo { key, name, description, labels, optional, is_default, run_if });
     }
     Ok(())
 }

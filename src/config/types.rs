@@ -15,6 +15,19 @@ pub struct Meta {
     pub banner: Option<String>,
     /// Custom inventory path (absolute or relative to meta.toml)
     pub inventory: Option<String>,
+    /// Default selectors for `dek apply` — keys and @label refs
+    #[serde(default)]
+    pub defaults: Vec<String>,
+    /// Test container settings
+    #[serde(default)]
+    pub test: Option<TestConfig>,
+}
+
+#[derive(Debug, Deserialize, Default, Clone)]
+#[serde(default)]
+pub struct TestConfig {
+    pub image: Option<String>,
+    pub keep: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -75,6 +88,9 @@ pub struct ConfigMeta {
     pub description: Option<String>,
     /// Shell command — skip this config when it exits non-zero
     pub run_if: Option<String>,
+    /// Labels for grouping (selectable via @label)
+    #[serde(default)]
+    pub labels: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -202,8 +218,12 @@ pub struct ConfigInfo {
     pub name: String,
     /// Description from meta
     pub description: Option<String>,
+    /// Labels from [meta] labels
+    pub labels: Vec<String>,
     /// Whether this is in optional/ (not applied by default)
     pub optional: bool,
+    /// Whether this config runs by default (computed from meta.defaults or !optional)
+    pub is_default: bool,
     /// Shell command condition from [meta] run_if
     pub run_if: Option<String>,
 }
