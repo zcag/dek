@@ -143,10 +143,10 @@ fn load_filtered<P: AsRef<Path>>(path: P, filter_keys: Option<&[String]>) -> Res
 
 fn load_all_from_dir(dir: &Path) -> Result<Config> {
     let mut merged = Config::default();
-    load_from_dir(dir, None, &mut merged)?;
+    load_from_dir_skip_run_if(dir, &mut merged)?;
     let optional_dir = dir.join("optional");
     if optional_dir.is_dir() {
-        load_from_dir(&optional_dir, None, &mut merged)?;
+        load_from_dir_skip_run_if(&optional_dir, &mut merged)?;
     }
     Ok(merged)
 }
@@ -221,6 +221,14 @@ fn load_directory(dir: &Path, filter_keys: Option<&[String]>) -> Result<Config> 
 }
 
 fn load_from_dir(dir: &Path, filter_keys: Option<&[String]>, merged: &mut Config) -> Result<()> {
+    load_from_dir_inner(dir, filter_keys, merged, true)
+}
+
+fn load_from_dir_skip_run_if(dir: &Path, merged: &mut Config) -> Result<()> {
+    load_from_dir_inner(dir, None, merged, false)
+}
+
+fn load_from_dir_inner(dir: &Path, filter_keys: Option<&[String]>, merged: &mut Config, eval_conditions: bool) -> Result<()> {
     for entry in get_config_entries(dir)? {
         let key = file_key(&entry.path());
         if key == "meta" {
@@ -236,9 +244,11 @@ fn load_from_dir(dir: &Path, filter_keys: Option<&[String]>, merged: &mut Config
         let config = load_file(&entry.path())?;
 
         // Skip config if run_if condition fails
-        if let Some(ref run_if) = config.meta.as_ref().and_then(|m| m.run_if.clone()) {
-            if !eval_run_if(run_if) {
-                continue;
+        if eval_conditions {
+            if let Some(ref run_if) = config.meta.as_ref().and_then(|m| m.run_if.clone()) {
+                if !eval_run_if(run_if) {
+                    continue;
+                }
             }
         }
 
