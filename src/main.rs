@@ -68,6 +68,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Apply configuration (all or specific configs)
+    #[command(alias = "a")]
     Apply {
         /// Configs to apply (e.g., "tools", "config"). Applies all if omitted.
         #[arg(value_name = "CONFIGS")]
@@ -97,6 +98,7 @@ enum Commands {
         args: Vec<String>,
     },
     /// Spin up container, apply config, drop into shell
+    #[command(alias = "t")]
     Test {
         /// Base image (default: meta.toml [test].image or "archlinux")
         #[arg(short, long)]
@@ -1347,11 +1349,6 @@ fn run_test(
         .or_else(|| test_config.and_then(|t| t.image.clone()))
         .unwrap_or_else(|| "archlinux".to_string());
 
-    // Derive keep: --rm overrides, else meta.toml, else true
-    let keep = if rm { false } else {
-        test_config.and_then(|t| t.keep).unwrap_or(true)
-    };
-
     // Container name from config identity
     let config_name = meta.as_ref().and_then(|m| m.name.as_deref())
         .unwrap_or_else(|| {
@@ -1367,38 +1364,34 @@ fn run_test(
     // Check existing container state
     let container_state = get_container_state(&container_name);
 
-    // --attach: just attach to existing
+    // --attach: just attach to existing (no rebuild)
     if attach {
         match container_state.as_deref() {
-            Some("running") => return docker_attach(&container_name),
+            Some("running") => return docker_shell(&container_name),
             Some(_) => {
                 docker_start(&container_name)?;
-                return docker_attach(&container_name);
+                return docker_shell(&container_name);
             }
             None => bail!("No container '{}' to attach to", container_name),
         }
     }
 
-    // Handle existing container
-    if let Some(ref state) = container_state {
-        if fresh {
+    // Handle --fresh: remove old container
+    if fresh {
+        if container_state.is_some() {
             println!("  {} Removing old container...", c!("→", yellow));
             let _ = Command::new("docker").args(["rm", "-f", &container_name])
                 .stdout(Stdio::null()).stderr(Stdio::null()).status();
-        } else if state == "running" {
-            output::print_header(&format!("Attaching to {}", container_name));
-            println!();
-            return docker_attach(&container_name);
-        } else {
-            // stopped container — restart it
-            output::print_header(&format!("Restarting {}", container_name));
-            println!();
-            docker_start(&container_name)?;
-            return docker_attach(&container_name);
         }
     }
 
-    output::print_header(&format!("Testing in {}", image));
+    let is_new = fresh || container_state.is_none();
+
+    if is_new {
+        output::print_header(&format!("Testing in {}", image));
+    } else {
+        output::print_header(&format!("Updating {}", container_name));
+    }
     println!();
 
     // Build dek binary
@@ -1425,62 +1418,69 @@ fn run_test(
     println!("  {} Baking config into binary...", c!("→", yellow));
     bake::create_baked_binary(&prepared_path, &dek_binary, &baked_path)?;
 
-    // Build docker args
-    let mut args = vec!["run".to_string()];
-
-    use std::io::IsTerminal;
-    if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
-        args.push("-it".to_string());
+    if is_new {
+        // Create new container with keep-alive process
+        println!("  {} Creating container...", c!("→", yellow));
+        let create_status = Command::new("docker")
+            .args(["create", "--name", &container_name, "-w", "/root", &image,
+                   "tail", "-f", "/dev/null"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .status()?;
+        if !create_status.success() {
+            bail!("Failed to create container");
+        }
     }
 
-    args.push("--name".to_string());
-    args.push(container_name.clone());
-
-    if !keep {
-        args.push("--rm".to_string());
+    // Copy baked binary into container
+    println!("  {} Copying dek into container...", c!("→", yellow));
+    let cp_status = Command::new("docker")
+        .args(["cp", &baked_path.to_string_lossy(), &format!("{}:/usr/local/bin/dek", container_name)])
+        .status()?;
+    if !cp_status.success() {
+        bail!("Failed to copy binary into container");
     }
 
-    // Mount only the baked binary
-    args.push("-v".to_string());
-    args.push(format!("{}:/usr/local/bin/dek:ro", baked_path.display()));
+    // Ensure container is running
+    if get_container_state(&container_name).as_deref() != Some("running") {
+        docker_start(&container_name)?;
+    }
 
-    args.push("-w".to_string());
-    args.push("/root".to_string());
-
-    args.push(image);
-
-    // Inner command: apply selectors then drop to shell
-    let apply_args = if selectors.is_empty() {
-        "dek apply".to_string()
-    } else {
-        format!("dek apply {}", selectors.join(" "))
-    };
-    args.push("sh".to_string());
-    args.push("-c".to_string());
-    args.push(format!(
-        r#"{}; echo ""; echo "Dropping into shell..."; exec bash -l 2>/dev/null || exec sh"#,
-        apply_args
-    ));
-
-    println!("  {} Starting container...", c!("→", yellow));
+    // Apply config inside container
+    println!("  {} Applying config...", c!("→", yellow));
     println!();
 
-    let status = Command::new("docker")
-        .args(&args)
+    let mut apply_args = vec!["exec".to_string(), container_name.clone(),
+                              "dek".to_string(), "apply".to_string()];
+    apply_args.extend(selectors);
+
+    let apply_status = Command::new("docker")
+        .args(&apply_args)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .status()?;
 
-    if !status.success() && keep {
-        // Container may have been created even if the command failed
+    if !apply_status.success() {
+        println!();
+        println!("  {} Apply had errors, dropping into shell anyway", c!("!", yellow));
     }
 
-    if keep {
+    // Drop into shell
+    println!();
+    println!("Dropping into shell...");
+    docker_shell(&container_name)?;
+
+    if rm {
+        let _ = Command::new("docker").args(["rm", "-f", &container_name])
+            .stdout(Stdio::null()).stderr(Stdio::null()).status();
+        println!("Container removed: {}", container_name);
+    } else {
         println!();
         println!("Container kept: {}", c!(container_name, bold));
-        println!("  Reattach:  {}", c!(format!("dek test"), dimmed));
-        println!("  Fresh:     {}", c!(format!("dek test --fresh"), dimmed));
+        println!("  Rerun:     {}", c!("dek test", dimmed));
+        println!("  Attach:    {}", c!("dek test --attach", dimmed));
+        println!("  Fresh:     {}", c!("dek test --fresh", dimmed));
         println!("  Remove:    {}", c!(format!("docker rm {}", container_name), dimmed));
     }
 
@@ -1513,7 +1513,7 @@ fn docker_start(name: &str) -> Result<()> {
     Ok(())
 }
 
-fn docker_attach(name: &str) -> Result<()> {
+fn docker_shell(name: &str) -> Result<()> {
     let status = Command::new("docker")
         .args(["exec", "-it", name, "bash", "-l"])
         .stdin(Stdio::inherit())
@@ -1665,30 +1665,29 @@ fn print_rich_help(meta: Option<&config::Meta>, config_path: &PathBuf) -> Result
 
     // Available configs
     if !configs.is_empty() {
-        println!("  {}", c!("CONFIGS", dimmed));
+        let defaults = meta.map(|m| &m.defaults[..]).unwrap_or(&[]);
+        if defaults.is_empty() {
+            println!("  {}", c!("CONFIGS", dimmed));
+        } else {
+            let defaults_str = defaults.join(", ");
+            println!("  {}  {}", c!("CONFIGS", dimmed), c!(format!("defaults: {}", defaults_str), dimmed));
+        }
         for cfg_info in &configs {
-            let marker = if cfg_info.is_default { "* " } else { "  " };
             let label = if cfg_info.name != cfg_info.key {
                 format!("{} ({})", cfg_info.key, cfg_info.name)
             } else {
                 cfg_info.key.clone()
             };
-            let labels_str = if cfg_info.labels.is_empty() {
-                String::new()
-            } else {
-                format!(" [{}]", cfg_info.labels.iter().map(|l| format!("@{}", l)).collect::<Vec<_>>().join(" "))
-            };
-            let desc = cfg_info.description.as_deref().unwrap_or("");
             if cfg_info.is_default {
-                print!("    {}", c!(format!("{}{}", marker, label), green));
+                print!("    {} {}", c!("•", green), c!(label, green));
             } else {
-                print!("    {}{}", marker, c!(label, white));
+                print!("      {}", c!(label, white));
             }
-            if !labels_str.is_empty() {
-                print!(" {}", c!(labels_str, dimmed));
+            for l in &cfg_info.labels {
+                print!(" {}", c!(format!("@{}", l), cyan));
             }
-            if !desc.is_empty() {
-                print!("  {}", c!(desc, dimmed));
+            if let Some(ref d) = cfg_info.description {
+                print!("  {}", c!(d, dimmed));
             }
             println!();
         }
