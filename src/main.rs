@@ -75,12 +75,14 @@ enum Commands {
         configs: Vec<String>,
     },
     /// Check what would change (dry-run)
+    #[command(alias = "c")]
     Check {
         /// Configs to check
         #[arg(value_name = "CONFIGS")]
         configs: Vec<String>,
     },
     /// List items from config (no state check)
+    #[command(alias = "p")]
     Plan {
         /// Configs to plan
         #[arg(value_name = "CONFIGS")]
@@ -89,6 +91,7 @@ enum Commands {
     /// List available configs
     List,
     /// Run a command from config (no name = list commands)
+    #[command(alias = "r")]
     Run {
         /// Command name (omit to list available commands)
         name: Option<String>,
@@ -1693,14 +1696,14 @@ fn print_rich_help(meta: Option<&config::Meta>, config_path: &PathBuf) -> Result
 
     // Commands
     println!("  {}", c!("COMMANDS", dimmed));
-    println!("    {}      {}", c!("apply", white), c!("Apply configuration", dimmed));
-    println!("    {}      {}", c!("check", white), c!("Check what would change (dry-run)", dimmed));
-    println!("    {}       {}", c!("plan", white), c!("List items from config", dimmed));
-    println!("    {}       {}", c!("list", white), c!("List available configs", dimmed));
-    println!("    {}        {}", c!("run", white), c!("Run a command from config", dimmed));
-    println!("    {}       {}", c!("test", white), c!("Test in container", dimmed));
-    println!("    {}       {}", c!("exec", white), c!("Run command in test container", dimmed));
-    println!("    {}       {}", c!("bake", white), c!("Bake into standalone binary", dimmed));
+    println!("    {} {}  {}", c!("apply", white), c!("a", dimmed), c!("Apply configuration", dimmed));
+    println!("    {} {}  {}", c!("check", white), c!("c", dimmed), c!("Check what would change (dry-run)", dimmed));
+    println!("    {}  {}  {}", c!("plan", white), c!("p", dimmed), c!("List items from config", dimmed));
+    println!("    {}  {}  {}", c!("list", white), c!(" ", dimmed), c!("List available configs", dimmed));
+    println!("    {}   {}  {}", c!("run", white), c!("r", dimmed), c!("Run a command from config", dimmed));
+    println!("    {}  {}  {}", c!("test", white), c!("t", dimmed), c!("Test in container", dimmed));
+    println!("    {} {}  {}", c!("exec", white), c!("dx", dimmed), c!("Run command in test container", dimmed));
+    println!("    {}  {}  {}", c!("bake", white), c!(" ", dimmed), c!("Bake into standalone binary", dimmed));
     println!();
 
     // Options
