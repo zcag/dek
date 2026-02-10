@@ -105,20 +105,27 @@ enum Commands {
         image: Option<String>,
 
         /// Remove container after exit (default: keep)
-        #[arg(long)]
+        #[arg(short = 'r', long)]
         rm: bool,
 
         /// Force new container (remove existing, rebake)
-        #[arg(long)]
+        #[arg(short, long)]
         fresh: bool,
 
         /// Attach to existing container
-        #[arg(long)]
+        #[arg(short, long)]
         attach: bool,
 
         /// Configs/selectors to apply (e.g., "tools", "@core")
         #[arg(value_name = "SELECTORS")]
         selectors: Vec<String>,
+    },
+    /// Run a command in the test container
+    #[command(alias = "dx")]
+    Exec {
+        /// Command and arguments to run
+        #[arg(trailing_var_arg = true, required = true)]
+        cmd: Vec<String>,
     },
     /// Bake config into standalone binary
     Bake {
@@ -224,6 +231,7 @@ fn main() -> Result<()> {
             }
         }
         Some(Commands::Test { image, rm, fresh, attach, selectors }) => run_test(config, image, rm, fresh, attach, selectors),
+        Some(Commands::Exec { cmd }) => run_exec(config, cmd),
         Some(Commands::Bake { config: bake_config, output }) => {
             bake::run(bake_config.or(config), output)
         }
@@ -1331,6 +1339,55 @@ fn run_inline(specs: &[String]) -> Result<()> {
     runner.run_items(&items?)
 }
 
+/// Derive the test container name from config metadata.
+fn test_container_name(config_path: Option<PathBuf>) -> Result<String> {
+    let config_path = resolve_config(config_path)?;
+    let resolved_path = config::resolve_path(&config_path)?;
+    let meta = config::load_meta(&resolved_path);
+    let config_name = meta.as_ref().and_then(|m| m.name.as_deref())
+        .unwrap_or_else(|| {
+            resolved_path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("dek")
+        });
+    let sanitized: String = config_name.to_lowercase().chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    Ok(format!("dek-test-{}", sanitized.trim_matches('-')))
+}
+
+fn run_exec(config_path: Option<PathBuf>, cmd: Vec<String>) -> Result<()> {
+    if which::which("docker").is_err() {
+        bail!("docker not found in PATH");
+    }
+
+    let container_name = test_container_name(config_path)?;
+
+    if get_container_state(&container_name).as_deref() != Some("running") {
+        bail!("Container '{}' is not running. Start it with: dek test", container_name);
+    }
+
+    let mut args = vec!["exec".to_string()];
+    use std::io::IsTerminal;
+    if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+        args.extend(["-it".to_string()]);
+    }
+    args.push(container_name);
+    args.extend(cmd);
+
+    let status = Command::new("docker")
+        .args(&args)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()?;
+
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+    Ok(())
+}
+
 fn run_test(
     config_path: Option<PathBuf>, image: Option<String>, rm: bool,
     fresh: bool, attach: bool, selectors: Vec<String>,
@@ -1350,16 +1407,7 @@ fn run_test(
         .unwrap_or_else(|| "archlinux".to_string());
 
     // Container name from config identity
-    let config_name = meta.as_ref().and_then(|m| m.name.as_deref())
-        .unwrap_or_else(|| {
-            resolved_path.file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("dek")
-        });
-    let sanitized: String = config_name.to_lowercase().chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect();
-    let container_name = format!("dek-test-{}", sanitized.trim_matches('-'));
+    let container_name = test_container_name(Some(resolved_path.clone()))?;
 
     // Check existing container state
     let container_state = get_container_state(&container_name);
@@ -1651,6 +1699,7 @@ fn print_rich_help(meta: Option<&config::Meta>, config_path: &PathBuf) -> Result
     println!("    {}       {}", c!("list", white), c!("List available configs", dimmed));
     println!("    {}        {}", c!("run", white), c!("Run a command from config", dimmed));
     println!("    {}       {}", c!("test", white), c!("Test in container", dimmed));
+    println!("    {}       {}", c!("exec", white), c!("Run command in test container", dimmed));
     println!("    {}       {}", c!("bake", white), c!("Bake into standalone binary", dimmed));
     println!();
 
