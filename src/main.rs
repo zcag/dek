@@ -1446,17 +1446,18 @@ fn run_test(
     }
     println!();
 
-    // Build dek binary
+    // Build dek binary (musl for portability across containers/distros)
     let cwd = std::env::current_dir()?;
+    let musl_target = "x86_64-unknown-linux-musl";
     let dek_binary = if cwd.join("Cargo.toml").exists() {
-        println!("  {} Building dek...", c!("→", yellow));
+        println!("  {} Building dek (musl)...", c!("→", yellow));
         let build_status = Command::new("cargo")
-            .args(["build", "--release", "--quiet"])
+            .args(["build", "--release", "--quiet", "--target", musl_target])
             .status()?;
         if !build_status.success() {
-            bail!("cargo build failed");
+            bail!("cargo build failed (is the musl target installed? rustup target add {})", musl_target);
         }
-        cwd.join("target/release/dek")
+        cwd.join(format!("target/{}/release/dek", musl_target))
     } else {
         std::env::current_exe()?
     };
