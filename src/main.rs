@@ -175,6 +175,11 @@ fn main() -> Result<()> {
     // Handle inline mode: dek cargo.bat apt.htop
     // If first arg has no dot, treat as: dek run <name> [args...]
     if !cli.inline.is_empty() {
+        // Dynamic completion for shell scripts
+        if cli.inline[0] == "_complete" {
+            let what = cli.inline.get(1).map(|s| s.as_str()).unwrap_or("");
+            return run_complete(cli.config, what);
+        }
         if !cli.inline[0].contains('.') {
             let mut args = cli.inline;
             let name = args.remove(0);
@@ -1596,15 +1601,12 @@ fn run_setup() -> Result<()> {
     let shell = util::Shell::detect();
     println!("  {} Detected shell: {}", c!("•", blue), shell.name());
 
-    // Generate completions
-    let mut completions = Vec::new();
-    let clap_shell = match shell {
-        util::Shell::Zsh => Shell::Zsh,
-        util::Shell::Bash => Shell::Bash,
-        util::Shell::Fish => Shell::Fish,
+    // Generate completions (custom scripts with dynamic completion support)
+    let completions_str = match shell {
+        util::Shell::Zsh => zsh_completions(),
+        util::Shell::Bash => bash_completions(),
+        util::Shell::Fish => fish_completions(),
     };
-    generate(clap_shell, &mut Cli::command(), "dek", &mut completions);
-    let completions_str = String::from_utf8(completions)?;
 
     // Determine completions path and install
     let home = std::env::var("HOME")?;
@@ -1766,4 +1768,248 @@ fn print_rich_help(meta: Option<&config::Meta>, config_path: &PathBuf) -> Result
     }
 
     Ok(())
+}
+
+fn run_complete(config_path: Option<PathBuf>, what: &str) -> Result<()> {
+    // Shell-agnostic check if completions are installed (for use in [[command]].check)
+    if what == "check" {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let path = match util::Shell::detect() {
+            util::Shell::Zsh => format!("{}/.zsh/completions/_dek", home),
+            util::Shell::Bash => format!("{}/.local/share/bash-completion/completions/dek", home),
+            util::Shell::Fish => format!("{}/.config/fish/completions/dek.fish", home),
+        };
+        if !std::path::Path::new(&path).exists() {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
+    let path = match config_path
+        .or_else(bake::check_embedded)
+        .or_else(config::find_default_config)
+    {
+        Some(p) => p,
+        None => return Ok(()),
+    };
+    let resolved = config::resolve_path(&path).unwrap_or(path);
+    let meta = config::load_meta(&resolved);
+
+    match what {
+        "configs" => {
+            let configs = config::list_configs(&resolved, meta.as_ref()).unwrap_or_default();
+            for cfg in &configs {
+                println!("{}", cfg.key);
+            }
+            let mut seen = std::collections::HashSet::new();
+            for cfg in &configs {
+                for l in &cfg.labels {
+                    if seen.insert(l.clone()) {
+                        println!("@{}", l);
+                    }
+                }
+            }
+        }
+        "run" => {
+            let config = config::load_all(&resolved).unwrap_or_default();
+            if let Some(run) = &config.run {
+                let mut cmds: Vec<_> = run.keys().collect();
+                cmds.sort();
+                for cmd in cmds {
+                    println!("{}", cmd);
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn zsh_completions() -> String {
+    r#"#compdef dek
+
+_dek_configs() {
+    local -a items
+    items=(${(f)"$(dek _complete configs 2>/dev/null)"})
+    [[ -n "$items" ]] && compadd -- $items
+}
+
+_dek_run_cmds() {
+    local -a items
+    items=(${(f)"$(dek _complete run 2>/dev/null)"})
+    [[ -n "$items" ]] && compadd -- $items
+}
+
+_dek() {
+    local curcontext="$curcontext" state
+    local -a commands=(
+        'apply:Apply configuration'
+        'a:Apply configuration'
+        'check:Check what would change'
+        'c:Check what would change'
+        'plan:List items from config'
+        'p:List items from config'
+        'list:List available configs'
+        'run:Run a command'
+        'r:Run a command'
+        'test:Test in container'
+        't:Test in container'
+        'exec:Run in test container'
+        'dx:Run in test container'
+        'bake:Bake into standalone binary'
+        'setup:Install completions'
+        'completions:Generate raw completions'
+    )
+
+    _arguments -C \
+        '(-C --config)'{-C,--config}'[Config path]:path:_files' \
+        '(-t --target)'{-t,--target}'[Remote target]:target:' \
+        '(-r --remotes)'{-r,--remotes}'[Remote pattern]:pattern:' \
+        '(-q --quiet)'{-q,--quiet}'[Suppress output]' \
+        '--color[Color mode]:mode:(auto always never)' \
+        '1:command:->cmd' \
+        '*::arg:->args'
+
+    case $state in
+        cmd)
+            _describe 'command' commands
+            ;;
+        args)
+            case ${words[1]} in
+                apply|a|check|c|plan|p)
+                    _dek_configs
+                    ;;
+                run|r)
+                    (( CURRENT == 2 )) && _dek_run_cmds
+                    ;;
+                test|t)
+                    _arguments \
+                        '(-i --image)'{-i,--image}'[Base image]:image:' \
+                        '(-r --rm)'{-r,--rm}'[Remove after exit]' \
+                        '(-f --fresh)'{-f,--fresh}'[Force new container]' \
+                        '(-a --attach)'{-a,--attach}'[Attach to existing]' \
+                        '*:selector:_dek_configs'
+                    ;;
+                exec|dx)
+                    _normal
+                    ;;
+                bake)
+                    _arguments \
+                        '(-o --output)'{-o,--output}'[Output path]:path:_files' \
+                        '*:config:_files'
+                    ;;
+                completions)
+                    _arguments '1:shell:(bash zsh fish)'
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+_dek "$@"
+"#.to_string()
+}
+
+fn bash_completions() -> String {
+    r#"_dek() {
+    local cur prev words cword
+    _init_completion || return
+
+    local commands="apply a check c plan p list run r test t exec dx bake setup completions"
+
+    # Find the subcommand
+    local cmd="" cmd_idx=0
+    for ((i=1; i<cword; i++)); do
+        case "${words[i]}" in
+            -C|--config|-t|--target|-r|--remotes|--color) ((i++)); continue ;;
+            -*) continue ;;
+            *) cmd="${words[i]}"; cmd_idx=$i; break ;;
+        esac
+    done
+
+    # Complete subcommand
+    if [[ -z "$cmd" ]]; then
+        COMPREPLY=($(compgen -W "$commands" -- "$cur"))
+        return
+    fi
+
+    case $cmd in
+        apply|a|check|c|plan|p)
+            COMPREPLY=($(compgen -W "$(dek _complete configs 2>/dev/null)" -- "$cur"))
+            ;;
+        run|r)
+            if [[ $cword -eq $((cmd_idx+1)) ]]; then
+                COMPREPLY=($(compgen -W "$(dek _complete run 2>/dev/null)" -- "$cur"))
+            fi
+            ;;
+        test|t)
+            case $prev in
+                -i|--image) return ;;
+            esac
+            if [[ $cur == -* ]]; then
+                COMPREPLY=($(compgen -W "-i --image -r --rm -f --fresh -a --attach" -- "$cur"))
+            else
+                COMPREPLY=($(compgen -W "$(dek _complete configs 2>/dev/null)" -- "$cur"))
+            fi
+            ;;
+        completions)
+            COMPREPLY=($(compgen -W "bash zsh fish" -- "$cur"))
+            ;;
+    esac
+}
+
+complete -F _dek dek
+"#.to_string()
+}
+
+fn fish_completions() -> String {
+    r#"# Subcommands
+set -l commands apply a check c plan p list run r test t exec dx bake setup completions
+
+complete -c dek -n "not __fish_seen_subcommand_from $commands" -a apply -d 'Apply configuration'
+complete -c dek -n "not __fish_seen_subcommand_from $commands" -a a -d 'Apply configuration'
+complete -c dek -n "not __fish_seen_subcommand_from $commands" -a check -d 'Check what would change'
+complete -c dek -n "not __fish_seen_subcommand_from $commands" -a c -d 'Check what would change'
+complete -c dek -n "not __fish_seen_subcommand_from $commands" -a plan -d 'List items from config'
+complete -c dek -n "not __fish_seen_subcommand_from $commands" -a p -d 'List items from config'
+complete -c dek -n "not __fish_seen_subcommand_from $commands" -a list -d 'List available configs'
+complete -c dek -n "not __fish_seen_subcommand_from $commands" -a run -d 'Run a command'
+complete -c dek -n "not __fish_seen_subcommand_from $commands" -a r -d 'Run a command'
+complete -c dek -n "not __fish_seen_subcommand_from $commands" -a test -d 'Test in container'
+complete -c dek -n "not __fish_seen_subcommand_from $commands" -a t -d 'Test in container'
+complete -c dek -n "not __fish_seen_subcommand_from $commands" -a exec -d 'Run in test container'
+complete -c dek -n "not __fish_seen_subcommand_from $commands" -a dx -d 'Run in test container'
+complete -c dek -n "not __fish_seen_subcommand_from $commands" -a bake -d 'Bake into standalone binary'
+complete -c dek -n "not __fish_seen_subcommand_from $commands" -a setup -d 'Install completions'
+complete -c dek -n "not __fish_seen_subcommand_from $commands" -a completions -d 'Generate raw completions'
+
+# Global options
+complete -c dek -s C -l config -d 'Config path' -r -F
+complete -c dek -s t -l target -d 'Remote target' -r
+complete -c dek -s r -l remotes -d 'Remote pattern' -r
+complete -c dek -s q -l quiet -d 'Suppress output'
+complete -c dek -l color -d 'Color mode' -r -a 'auto always never'
+
+# Dynamic completions for apply/check/plan and aliases
+for cmd in apply a check c plan p
+    complete -c dek -n "__fish_seen_subcommand_from $cmd" -a "(dek _complete configs 2>/dev/null)" -f
+end
+
+# Dynamic completions for run and alias
+for cmd in run r
+    complete -c dek -n "__fish_seen_subcommand_from $cmd" -a "(dek _complete run 2>/dev/null)" -f
+end
+
+# Test flags and dynamic completions
+for cmd in test t
+    complete -c dek -n "__fish_seen_subcommand_from $cmd" -s i -l image -d 'Base image' -r
+    complete -c dek -n "__fish_seen_subcommand_from $cmd" -s r -l rm -d 'Remove after exit'
+    complete -c dek -n "__fish_seen_subcommand_from $cmd" -s f -l fresh -d 'Force new container'
+    complete -c dek -n "__fish_seen_subcommand_from $cmd" -s a -l attach -d 'Attach to existing'
+    complete -c dek -n "__fish_seen_subcommand_from $cmd" -a "(dek _complete configs 2>/dev/null)" -f
+end
+
+# Completions subcommand
+complete -c dek -n "__fish_seen_subcommand_from completions" -a "bash zsh fish" -f
+"#.to_string()
 }

@@ -177,7 +177,8 @@ pub struct CommandConfig {
     pub name: String,
     /// Shell command that returns 0 if satisfied
     pub check: String,
-    /// Shell command to apply the state
+    /// Shell command to apply the state (accepts "cmd" as alias)
+    #[serde(alias = "cmd")]
     pub apply: String,
     #[serde(default)]
     pub run_if: Option<String>,

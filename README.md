@@ -412,6 +412,30 @@ image = "ubuntu:22.04"
 
 CLI flags override meta.toml (`-i/--image`, `-r/--rm`).
 
+## Completions
+
+Dynamic completions for configs, @labels, and run commands.
+
+### Manual
+
+```bash
+dek setup              # auto-detect shell, install completions
+dek completions zsh    # raw output (pipe to file yourself)
+```
+
+### Via dek config
+
+Add to any config (e.g., `15-shell.toml`):
+
+```toml
+[[command]]
+name = "dek completions"
+cmd = "dek setup"
+check = "dek _complete check"
+```
+
+Completions support all aliases (`a`, `c`, `p`, `r`, `t`, `dx`) and dynamically complete config keys, `@labels`, and run command names from whatever config is in the current directory.
+
 ## Bake
 
 Embed config into a standalone binary:
