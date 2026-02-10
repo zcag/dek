@@ -52,6 +52,10 @@ struct Cli {
     #[arg(short, long, global = true)]
     quiet: bool,
 
+    /// Config is already prepared (skip prepare_config). Used by remote deploy.
+    #[arg(long, hide = true, global = true)]
+    prepared: bool,
+
     /// Color output: auto (default), always, never
     #[arg(long, global = true, default_value = "auto")]
     color: ColorMode,
@@ -159,6 +163,7 @@ fn main() -> Result<()> {
     let target = cli.target;
     let remotes = cli.remotes;
     let quiet = cli.quiet;
+    let prepared = cli.prepared;
 
     match cli.command {
         Some(Commands::Apply { configs }) => {
@@ -167,7 +172,7 @@ fn main() -> Result<()> {
             } else if let Some(t) = target {
                 run_remote(&t, "apply", config.clone(), &configs)
             } else {
-                run_mode(runner::Mode::Apply, config, configs, quiet)
+                run_mode(runner::Mode::Apply, config, configs, quiet, prepared)
             }
         }
         Some(Commands::Check { configs }) => {
@@ -176,7 +181,7 @@ fn main() -> Result<()> {
             } else if let Some(t) = target {
                 run_remote(&t, "check", config.clone(), &configs)
             } else {
-                run_mode(runner::Mode::Check, config, configs, quiet)
+                run_mode(runner::Mode::Check, config, configs, quiet, prepared)
             }
         }
         Some(Commands::Plan { configs }) => {
@@ -185,7 +190,7 @@ fn main() -> Result<()> {
             } else if let Some(t) = target {
                 run_remote(&t, "plan", config.clone(), &configs)
             } else {
-                run_mode(runner::Mode::Plan, config, configs, quiet)
+                run_mode(runner::Mode::Plan, config, configs, quiet, prepared)
             }
         }
         Some(Commands::List) => {
@@ -267,7 +272,7 @@ fn resolve_config(config: Option<PathBuf>) -> Result<PathBuf> {
     }
 }
 
-fn run_mode(mode: runner::Mode, config_path: Option<PathBuf>, configs: Vec<String>, quiet: bool) -> Result<()> {
+fn run_mode(mode: runner::Mode, config_path: Option<PathBuf>, configs: Vec<String>, quiet: bool, prepared: bool) -> Result<()> {
     let path = resolve_config(config_path)?;
     let resolved_path = config::resolve_path(&path)?;
     let meta = config::load_meta(&resolved_path);
@@ -304,8 +309,8 @@ fn run_mode(mode: runner::Mode, config_path: Option<PathBuf>, configs: Vec<Strin
     };
 
     // Resolve artifacts (build outputs) before running.
-    // Skip when running from a tarball — config is already fully prepared (remote deploy / bake).
-    let working_path = if util::is_tar_gz(&path) {
+    // Skip when --prepared (rsync remote deploy) or tarball (bake).
+    let working_path = if prepared || util::is_tar_gz(&path) {
         resolved_path.clone()
     } else {
         prepare_config(&resolved_path, &config)?
@@ -315,30 +320,20 @@ fn run_mode(mode: runner::Mode, config_path: Option<PathBuf>, configs: Vec<Strin
     runner.run(&config, &working_path)
 }
 
-/// Pre-built archive and binary info for remote deployment
+/// Pre-built config dir and binary info for remote deployment
 struct RemotePayload {
-    local_tar: String,
-    config_hash: String,
+    prepared_dir: PathBuf,
     bin_hash: String,
     dek_binary: PathBuf,
 }
 
 impl RemotePayload {
-    fn prepare(config_path: &std::path::Path) -> Result<Self> {
-        let tar_data = util::create_tar_gz(config_path)?;
-        let config_hash = format!("{:x}", md5::compute(&tar_data));
-        let local_tar = format!("/tmp/dek-config-{}.tar.gz", &config_hash[..8]);
-        std::fs::write(&local_tar, &tar_data)?;
-
+    fn prepare(prepared_dir: &std::path::Path) -> Result<Self> {
         let dek_binary = std::env::current_exe()?;
         let bin_data = std::fs::read(&dek_binary)?;
         let bin_hash = format!("{:x}", md5::compute(&bin_data));
 
-        Ok(Self { local_tar, config_hash, bin_hash, dek_binary })
-    }
-
-    fn cleanup(&self) {
-        let _ = std::fs::remove_file(&self.local_tar);
+        Ok(Self { prepared_dir: prepared_dir.to_path_buf(), bin_hash, dek_binary })
     }
 }
 
@@ -357,7 +352,7 @@ fn run_remote(target: &str, cmd: &str, config_path: Option<PathBuf>, configs: &[
     let payload = RemotePayload::prepare(&prepared_abs)?;
 
     // Show payload sizes
-    let config_size = std::fs::metadata(&payload.local_tar).map(|m| m.len()).unwrap_or(0);
+    let config_size = dir_size(&payload.prepared_dir);
     let bin_size = std::fs::metadata(&payload.dek_binary).map(|m| m.len()).unwrap_or(0);
     println!("  {} payload — config: {}, binary: {}",
         c!("→", yellow),
@@ -367,7 +362,6 @@ fn run_remote(target: &str, cmd: &str, config_path: Option<PathBuf>, configs: &[
     println!();
 
     let result = deploy_to_host(target, cmd, configs, &payload, None)?;
-    payload.cleanup();
 
     // Print full remote output for single-host
     for line in result.output.lines() {
@@ -401,7 +395,7 @@ fn deploy_to_host(
     let start = std::time::Instant::now();
     let remote_dir = "/tmp/dek-remote";
     let remote_bin = format!("{}/dek", remote_dir);
-    let remote_config = format!("{}/config.tar.gz", remote_dir);
+    let remote_config = format!("{}/config/", remote_dir);
     let mut log = String::new();
 
     let update = |msg: &str| {
@@ -440,20 +434,22 @@ fn deploy_to_host(
         update("binary cached");
     }
 
-    // Copy config
-    update("uploading config...");
-    let scp_config = Command::new("scp")
-        .args(["-q", &payload.local_tar, &format!("{}:{}", target, remote_config)])
-        .status()?;
-    if !scp_config.success() {
-        bail!("Failed to copy config to {}", target);
+    // Rsync config
+    update("syncing config...");
+    let local_src = format!("{}/", payload.prepared_dir.display());
+    let remote_dest = format!("{}:{}", target, remote_config);
+    let rsync = Command::new("rsync")
+        .args(["-az", "--delete", &local_src, &remote_dest])
+        .output()?;
+    if !rsync.status.success() {
+        let err = String::from_utf8_lossy(&rsync.stderr);
+        bail!("Failed to rsync config to {}: {}", target, err.trim());
     }
 
     // Run dek on remote
     update(&format!("running {}...", cmd));
-    let config_arg = format!("-C {}", remote_config);
     let configs_arg = configs.join(" ");
-    let remote_cmd = format!("{} -q {} {} {}", remote_bin, cmd, config_arg, configs_arg);
+    let remote_cmd = format!("{} -q --prepared {} -C {} {}", remote_bin, cmd, remote_config, configs_arg);
 
     let output = Command::new("ssh")
         .args([target, &remote_cmd])
@@ -559,11 +555,11 @@ fn run_remotes(pattern: &str, cmd: &str, config_path: Option<PathBuf>, configs: 
     let prepared_config = prepare_config(&config_abs, &dek_config)?;
     let prepared_abs = std::fs::canonicalize(&prepared_config)?;
 
-    // Create archive and compute binary hash once
+    // Compute binary hash once
     let payload = RemotePayload::prepare(&prepared_abs)?;
 
     // Show payload sizes
-    let config_size = std::fs::metadata(&payload.local_tar).map(|m| m.len()).unwrap_or(0);
+    let config_size = dir_size(&payload.prepared_dir);
     let bin_size = std::fs::metadata(&payload.dek_binary).map(|m| m.len()).unwrap_or(0);
     println!("{} Payload ready — config: {}, binary: {}",
         c!("::", blue),
@@ -637,8 +633,6 @@ fn run_remotes(pattern: &str, cmd: &str, config_path: Option<PathBuf>, configs: 
             std::process::exit(1);
         }
     });
-
-    payload.cleanup();
 
     Ok(())
 }
@@ -876,6 +870,22 @@ fn artifact_watch_save(base_dir: &std::path::Path, artifact: &config::ArtifactCo
     let cache = artifact_cache_path(base_dir, artifact);
     let hash = artifact_watch_hash(base_dir, artifact);
     let _ = std::fs::write(&cache, &hash);
+}
+
+/// Recursively sum file sizes in a directory.
+fn dir_size(path: &std::path::Path) -> u64 {
+    let mut total = 0;
+    if let Ok(rd) = std::fs::read_dir(path) {
+        for entry in rd.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                total += dir_size(&p);
+            } else if let Ok(m) = p.metadata() {
+                total += m.len();
+            }
+        }
+    }
+    total
 }
 
 fn run_list(config_path: Option<PathBuf>) -> Result<()> {
