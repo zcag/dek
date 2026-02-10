@@ -20,7 +20,13 @@ dek apply              # apply ./dek.toml or ./dek/
 dek check              # dry-run, show what would change
 dek plan               # list items (no state check)
 dek list               # list available configs
+dek run <name>         # run a command from config
+dek test               # test in container
+dek exec <cmd>         # run command in test container
+dek bake               # bake into standalone binary
 ```
+
+All commands have short aliases: `a`pply, `c`heck, `p`lan, `r`un, `t`est, `dx` (exec).
 
 Config is loaded from: `./dek.toml`, `./dek/`, or `$XDG_CONFIG_HOME/dek/` (fallback).
 
@@ -185,15 +191,64 @@ Installs `ripgrep`, checks for `rg` in PATH.
 
 ```
 dek/
-├── meta.toml           # name, description, banner
+├── meta.toml           # project metadata + defaults
+├── banner.txt          # optional banner (shown on apply/help)
+├── inventory.ini       # remote hosts (one per line)
 ├── 00-packages.toml
 ├── 10-services.toml
 ├── 20-dotfiles.toml
 └── optional/
-    └── extra.toml      # only applied when explicitly requested
+    └── extra.toml      # only applied when explicitly selected
 ```
 
 Files merged alphabetically. Use `dek apply extra` to include optional configs.
+
+### meta.toml
+
+```toml
+name = "myproject"
+description = "Project deployment"
+version = "1.0"
+defaults = ["@setup", "@deploy"]     # default selectors for apply
+inventory = "../devops/inventory.ini" # custom inventory path
+
+[test]
+image = "ubuntu:22.04"
+keep = true
+```
+
+### Labels & Selectors
+
+Tag configs with labels for grouped selection:
+
+```toml
+# 10-deps.toml
+[meta]
+name = "Dependencies"
+labels = ["setup"]
+
+[package.os]
+items = ["curl", "git"]
+```
+
+```toml
+# 20-deploy.toml
+[meta]
+name = "Deploy"
+labels = ["deploy"]
+
+[file.copy]
+"app.jar" = "/opt/app/app.jar"
+```
+
+```bash
+dek apply @setup          # only configs labeled "setup"
+dek apply @deploy         # only configs labeled "deploy"
+dek apply @setup tools    # @label refs and config keys can be mixed
+dek apply                 # uses meta.toml defaults (or all main configs if no defaults)
+```
+
+When `defaults` is set in `meta.toml`, a bare `dek apply` applies only those selectors. Without `defaults`, it applies all non-optional configs (backward compatible).
 
 ## Run Commands
 
@@ -323,13 +378,39 @@ dek pip.httpie npm.prettier
 
 ## Test
 
-Spin up a container to test your config:
+Bakes config into the binary and runs it in a container. The baked `dek` inside the container is fully functional — `apply`, `list`, `run` all work.
 
 ```bash
-dek test                    # archlinux by default
-dek test --image ubuntu
-dek test --keep             # keep container after exit
+dek test                     # bake + create container + apply + shell
+dek test @core               # only apply @core labeled configs
+dek test -i ubuntu tools     # custom image + specific configs
+dek test                     # (second run) rebake + apply + shell (container kept)
+dek test -f                  # force new container (remove + recreate)
+dek test -a                  # attach to running container (no rebuild)
+dek test -r                  # remove container after exit
 ```
+
+Containers are kept by default and named `dek-test-{name}` (from `meta.toml` name or directory). On subsequent runs, dek rebakes the binary, copies it into the existing container, reapplies config, and drops into a shell — installed packages and files persist.
+
+### Exec
+
+Run commands directly in the test container:
+
+```bash
+dek exec ls /opt/app         # run a command
+dek dx cat /etc/os-release   # dx is a short alias
+dek dx dek run version       # run dek commands inside
+dek dx dek list              # list configs in container
+```
+
+Configure defaults in `meta.toml`:
+
+```toml
+[test]
+image = "ubuntu:22.04"
+```
+
+CLI flags override meta.toml (`-i/--image`, `-r/--rm`).
 
 ## Bake
 
