@@ -215,7 +215,20 @@ impl SysPkgManager {
                 }
                 return Ok(());
             }
-            Self::Apt => run_sudo("apt-get", &["install", "-y", pkg])?,
+            Self::Apt => {
+                // Run apt-get update if package lists are missing (fresh containers)
+                let lists = std::path::Path::new("/var/lib/apt/lists");
+                let has_lists = lists.is_dir() && std::fs::read_dir(lists)
+                    .map(|mut d| d.any(|e| e.ok().map(|e| e.file_name().to_string_lossy().contains("_Packages")).unwrap_or(false)))
+                    .unwrap_or(false);
+                if !has_lists {
+                    let update = run_sudo("apt-get", &["update", "-qq"])?;
+                    if !update.status.success() {
+                        anyhow::bail!("apt-get update failed");
+                    }
+                }
+                run_sudo("apt-get", &["install", "-y", pkg])?
+            }
             Self::Brew => run_cmd("brew", &["install", pkg])?,
         };
 
@@ -296,6 +309,15 @@ fn install_yay() -> Result<()> {
 
 /// Run a script from a URL via curl | sh
 pub fn run_install_script(url: &str, args: &[&str]) -> Result<()> {
+    // Ensure curl is available — install via system package manager if missing
+    if !command_exists("curl") {
+        if let Some(pm) = SysPkgManager::detect() {
+            pm.install("curl")?;
+        } else {
+            anyhow::bail!("curl not found and no package manager available to install it");
+        }
+    }
+
     let curl = Command::new("curl")
         .args(["-fsSL", url])
         .output()

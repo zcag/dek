@@ -270,6 +270,7 @@ fn ensure_user_path() {
     let extra = [
         format!("{}/.cargo/bin", home),
         format!("{}/.local/bin", home),
+        format!("{}/.local/opt/go/bin", home),
         format!("{}/go/bin", home),
         format!("{}/.npm-global/bin", home),
     ];
