@@ -1715,7 +1715,7 @@ fn print_rich_help(meta: Option<&config::Meta>, config_path: &PathBuf) -> Result
     println!("  {}", c!("OPTIONS", dimmed));
     println!("    {}  {}", c!("-C, --config <PATH>", white), c!("Config path", dimmed));
     println!("    {}  {}", c!("-t, --target <HOST>", white), c!("Remote target (user@host)", dimmed));
-    println!("    {} {}", c!("--remotes <PATTERN>", white), c!("Remote targets from inventory (glob)", dimmed));
+    println!("    {} {}", c!("-r, --remotes <PATTERN>", white), c!("Remote targets from inventory (glob)", dimmed));
     println!("    {}              {}", c!("-h, --help", white), c!("Print help", dimmed));
     println!("    {}           {}", c!("-V, --version", white), c!("Print version", dimmed));
     println!();
