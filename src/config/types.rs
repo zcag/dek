@@ -140,11 +140,36 @@ fn default_service_state() -> String {
 #[serde(default)]
 pub struct FileConfig {
     pub copy: Option<HashMap<String, String>>,
+    pub fetch: Option<HashMap<String, FetchTarget>>,
     pub symlink: Option<HashMap<String, String>>,
     pub ensure_line: Option<HashMap<String, Vec<String>>>,
     /// Structured line entries with original pattern matching
     #[serde(default)]
     pub line: Vec<FileLineConfig>,
+}
+
+/// Fetch target: either a plain path string or { path, ttl }
+#[derive(Debug, Deserialize, Clone)]
+#[serde(untagged)]
+pub enum FetchTarget {
+    Path(String),
+    WithOptions { path: String, ttl: Option<String> },
+}
+
+impl FetchTarget {
+    pub fn path(&self) -> &str {
+        match self {
+            Self::Path(p) => p,
+            Self::WithOptions { path, .. } => path,
+        }
+    }
+
+    pub fn ttl(&self) -> Option<&str> {
+        match self {
+            Self::Path(_) => None,
+            Self::WithOptions { ttl, .. } => ttl.as_deref(),
+        }
+    }
 }
 
 /// Structured ensure_line with original pattern support

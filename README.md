@@ -78,6 +78,10 @@ scope = "user"
 [file.copy]
 "dotfiles/.zshrc" = "~/.zshrc"
 
+[file.fetch]
+"https://raw.githubusercontent.com/user/repo/main/.bashrc" = "~/.bashrc"
+"https://example.com/config.json" = { path = "~/.config/app/config.json", ttl = "1h" }
+
 [file.symlink]
 "~/dotfiles/nvim" = "~/.config/nvim"
 
@@ -133,6 +137,21 @@ foreach = "rg --files ~/Sync/vault 2>/dev/null | grep conflict | sed 's|.*/||'"
 name = "stow"
 foreach = "for p in common nvim tmux; do stow -d ~/dotty -n -v $p 2>&1 | grep -q LINK && echo $p; done"
 ```
+
+## File Fetch
+
+Download files from URLs. Results are cached at `~/.cache/dek/url/`. Use `ttl` to control cache expiry:
+
+```toml
+[file.fetch]
+# Cache forever (re-fetches only when cache is cleared)
+"https://raw.githubusercontent.com/user/repo/main/.bashrc" = "~/.bashrc"
+
+# Cache for 1 hour — re-fetches if older
+"https://example.com/config.json" = { path = "~/.config/app/config.json", ttl = "1h" }
+```
+
+Supported TTL units: `s` (seconds), `m` (minutes), `h` (hours), `d` (days). Can be combined: `1h30m`.
 
 ## Assertions
 

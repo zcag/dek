@@ -352,6 +352,57 @@ pub fn run_install_script(url: &str, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
+/// Parse a human-readable duration string (e.g. "1h", "30m", "1d", "1h30m")
+pub fn parse_duration(s: &str) -> Result<std::time::Duration> {
+    let mut total_secs: u64 = 0;
+    let mut num_buf = String::new();
+    for c in s.chars() {
+        if c.is_ascii_digit() {
+            num_buf.push(c);
+        } else {
+            let n: u64 = num_buf.parse().with_context(|| format!("invalid duration: {}", s))?;
+            num_buf.clear();
+            total_secs += match c {
+                's' => n,
+                'm' => n * 60,
+                'h' => n * 3600,
+                'd' => n * 86400,
+                _ => anyhow::bail!("unknown duration unit '{}' in: {}", c, s),
+            };
+        }
+    }
+    if !num_buf.is_empty() {
+        // bare number = seconds
+        let n: u64 = num_buf.parse().with_context(|| format!("invalid duration: {}", s))?;
+        total_secs += n;
+    }
+    Ok(std::time::Duration::from_secs(total_secs))
+}
+
+/// Download a URL to bytes using curl, with file-based caching.
+/// `max_age`: `None` = cache indefinitely, `Some(d)` = expire after duration.
+pub fn fetch_url(url: &str, max_age: Option<std::time::Duration>) -> Result<Vec<u8>> {
+    if let Some(data) = crate::cache::get(url, max_age) {
+        return Ok(data);
+    }
+    if !command_exists("curl") {
+        if let Some(pm) = SysPkgManager::detect() {
+            pm.install("curl")?;
+        } else {
+            anyhow::bail!("curl not found and no package manager available");
+        }
+    }
+    let output = Command::new("curl")
+        .args(["-fsSL", url])
+        .output()
+        .with_context(|| format!("Failed to fetch: {}", url))?;
+    if !output.status.success() {
+        anyhow::bail!("Failed to download: {}", url);
+    }
+    crate::cache::set(url, &output.stdout);
+    Ok(output.stdout)
+}
+
 /// Check if path is a tar.gz file
 pub fn is_tar_gz(path: &Path) -> bool {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");

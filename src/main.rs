@@ -7,6 +7,7 @@ macro_rules! c {
 }
 
 mod bake;
+mod cache;
 mod config;
 mod output;
 mod providers;

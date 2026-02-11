@@ -66,6 +66,79 @@ impl Provider for CopyProvider {
 }
 
 // =============================================================================
+// FETCH (download URL to file)
+// =============================================================================
+
+pub struct FetchProvider;
+
+/// Decode value: "path\x00ttl"
+fn parse_fetch_value(state: &StateItem) -> (&str, Option<std::time::Duration>) {
+    let raw = state.value.as_deref().unwrap_or("");
+    let (path, ttl_str) = raw.split_once('\x00').unwrap_or((raw, ""));
+    let ttl = if ttl_str.is_empty() {
+        None
+    } else {
+        crate::util::parse_duration(ttl_str).ok()
+    };
+    (path, ttl)
+}
+
+impl Provider for FetchProvider {
+    fn name(&self) -> &'static str {
+        "file.fetch"
+    }
+
+    fn check(&self, state: &StateItem) -> Result<CheckResult> {
+        let url = &state.key;
+        let (path, ttl) = parse_fetch_value(state);
+        let dst = expand_path(path);
+
+        if dst.as_os_str().is_empty() {
+            bail!("file.fetch: destination not specified for '{}'", url);
+        }
+
+        if !dst.exists() {
+            return Ok(CheckResult::Missing {
+                detail: format!("destination '{}' does not exist", dst.display()),
+            });
+        }
+
+        let src_content = crate::util::fetch_url(url, ttl)?;
+        let dst_content = fs::read(&dst)
+            .with_context(|| format!("failed to read destination: {}", dst.display()))?;
+
+        if src_content == dst_content {
+            Ok(CheckResult::Satisfied)
+        } else {
+            Ok(CheckResult::Missing {
+                detail: format!("contents differ for '{}'", dst.display()),
+            })
+        }
+    }
+
+    fn apply(&self, state: &StateItem) -> Result<()> {
+        let url = &state.key;
+        let (path, ttl) = parse_fetch_value(state);
+        let dst = expand_path(path);
+
+        if dst.as_os_str().is_empty() {
+            bail!("file.fetch: destination not specified for '{}'", url);
+        }
+
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create parent dirs for: {}", dst.display()))?;
+        }
+
+        let content = crate::util::fetch_url(url, ttl)?;
+        fs::write(&dst, &content)
+            .with_context(|| format!("failed to write: {}", dst.display()))?;
+
+        Ok(())
+    }
+}
+
+// =============================================================================
 // SYMLINK
 // =============================================================================
 

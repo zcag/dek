@@ -303,6 +303,7 @@ impl ProviderRegistry {
             Box::new(package::PipxProvider),
             Box::new(service::SystemdProvider),
             Box::new(file::CopyProvider),
+            Box::new(file::FetchProvider),
             Box::new(file::SymlinkProvider),
             Box::new(file::EnsureLineProvider),
             Box::new(file::FileLineProvider),

@@ -304,6 +304,13 @@ fn collect_state_items(config: &Config, base_dir: &Path) -> Vec<StateItem> {
                 items.push(StateItem::new("file.copy", &src_resolved).with_value(dst));
             }
         }
+        if let Some(ref fetch) = file.fetch {
+            for (url, target) in fetch {
+                // Encode: path\x00ttl (ttl may be empty)
+                let value = format!("{}\x00{}", target.path(), target.ttl().unwrap_or(""));
+                items.push(StateItem::new("file.fetch", url).with_value(value));
+            }
+        }
         if let Some(ref symlink) = file.symlink {
             for (src, dst) in symlink {
                 let src_resolved = resolve_source_path(src, base_dir);
