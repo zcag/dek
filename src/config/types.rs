@@ -33,6 +33,9 @@ pub struct Meta {
 pub struct TestConfig {
     pub image: Option<String>,
     pub keep: Option<bool>,
+    /// Volume mounts for test container (e.g. "/host/path:/container/path")
+    #[serde(default)]
+    pub mount: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]

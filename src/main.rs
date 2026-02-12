@@ -1454,9 +1454,35 @@ fn run_test(
     if is_new {
         // Create new container with keep-alive process
         println!("  {} Creating container...", c!("→", yellow));
+        let mut create_args = vec!["create", "--name", &container_name, "-w", "/root"];
+        let config_dir = if resolved_path.is_file() {
+            resolved_path.parent().unwrap_or(std::path::Path::new("."))
+        } else {
+            resolved_path.as_path()
+        };
+        let mounts: Vec<String> = test_config
+            .map(|t| t.mount.clone())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|m| {
+                // Resolve relative host paths against config dir
+                if let Some((host, rest)) = m.split_once(':') {
+                    if !host.starts_with('/') && !host.starts_with('~') {
+                        let abs = config_dir.join(host).canonicalize()
+                            .unwrap_or_else(|_| config_dir.join(host));
+                        return format!("{}:{}", abs.display(), rest);
+                    }
+                }
+                m
+            })
+            .collect();
+        for m in &mounts {
+            create_args.push("-v");
+            create_args.push(m);
+        }
+        create_args.extend_from_slice(&[&image, "tail", "-f", "/dev/null"]);
         let create_status = Command::new("docker")
-            .args(["create", "--name", &container_name, "-w", "/root", &image,
-                   "tail", "-f", "/dev/null"])
+            .args(&create_args)
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
             .status()?;
