@@ -282,6 +282,54 @@ fn ensure_user_path() {
     std::env::set_var("PATH", parts.join(":"));
 }
 
+/// Compare semver strings (e.g. "0.1.28" > "0.1.27")
+fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let parse = |s: &str| -> Vec<u64> {
+        s.split('.').filter_map(|p| p.parse().ok()).collect()
+    };
+    parse(a).cmp(&parse(b))
+}
+
+/// Check min_version from meta.toml. If current dek is outdated, update and exit.
+fn check_min_version(meta: Option<&config::Meta>) -> Result<()> {
+    let min = match meta.and_then(|m| m.min_version.as_deref()) {
+        Some(v) => v,
+        None => return Ok(()),
+    };
+    let current = env!("CARGO_PKG_VERSION");
+    if version_cmp(current, min) != std::cmp::Ordering::Less {
+        return Ok(());
+    }
+
+    println!("  {} dek {} required (current: {}), updating...",
+        c!("→", yellow), min, current);
+
+    // Try cargo-binstall first (fast, pre-compiled), fall back to cargo install
+    let ok = if util::command_exists("cargo-binstall") {
+        std::process::Command::new("cargo-binstall")
+            .args(["dek", "--no-confirm"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    } else if util::command_exists("cargo") {
+        std::process::Command::new("cargo")
+            .args(["install", "dek"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
+    if ok {
+        println!();
+        println!("  {} dek updated. Please rerun your command.", c!("✓", green));
+        std::process::exit(0);
+    } else {
+        bail!("Failed to update dek to {}", min);
+    }
+}
+
 fn resolve_config(config: Option<PathBuf>) -> Result<PathBuf> {
     match config {
         Some(path) => Ok(path),
@@ -300,6 +348,7 @@ fn run_mode(mode: runner::Mode, config_path: Option<PathBuf>, configs: Vec<Strin
     let path = resolve_config(config_path)?;
     let resolved_path = config::resolve_path(&path)?;
     let meta = config::load_meta(&resolved_path);
+    check_min_version(meta.as_ref())?;
 
     let verb = match mode {
         runner::Mode::Apply => "Applying",
@@ -961,6 +1010,7 @@ fn run_command_remote(
 
     // Apply runtime vars from meta.toml
     let meta = config::load_meta(&resolved_path);
+    check_min_version(meta.as_ref())?;
     if let Some(ref vars) = meta.as_ref().and_then(|m| m.vars.as_ref()) {
         config::apply_vars(vars, &[]);
     }
@@ -1178,6 +1228,7 @@ fn run_command(config_path: Option<PathBuf>, name: Option<String>, args: Vec<Str
 
     // Apply runtime vars from meta.toml
     let meta = config::load_meta(&resolved_path);
+    check_min_version(meta.as_ref())?;
     if let Some(ref vars) = meta.as_ref().and_then(|m| m.vars.as_ref()) {
         config::apply_vars(vars, &[]);
     }
@@ -1383,6 +1434,7 @@ fn run_test(
     let config_path = resolve_config(config_path)?;
     let resolved_path = config::resolve_path(&config_path)?;
     let meta = config::load_meta(&resolved_path);
+    check_min_version(meta.as_ref())?;
     let test_config = meta.as_ref().and_then(|m| m.test.as_ref());
 
     // Derive image: CLI > meta.toml > "archlinux"

@@ -11,6 +11,8 @@ pub struct Meta {
     pub description: Option<String>,
     /// Version string
     pub version: Option<String>,
+    /// Minimum dek version required (e.g. "0.1.28")
+    pub min_version: Option<String>,
     /// Banner text shown on apply
     pub banner: Option<String>,
     /// Custom inventory path (absolute or relative to meta.toml)
