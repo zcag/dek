@@ -182,6 +182,9 @@ fn main() -> Result<()> {
         if !cli.inline[0].contains('.') {
             let mut args = cli.inline;
             let name = args.remove(0);
+            if cli.remotes.is_some() || cli.target.is_some() {
+                return run_command_remote(cli.config, Some(name), args, cli.target, cli.remotes);
+            }
             return run_command(cli.config, Some(name), args);
         }
         return run_inline(&cli.inline);
