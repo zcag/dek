@@ -89,8 +89,6 @@ enum Commands {
         #[arg(value_name = "CONFIGS")]
         configs: Vec<String>,
     },
-    /// List available configs
-    List,
     /// Run a command from config (no name = list commands)
     #[command(alias = "r")]
     Run {
@@ -223,15 +221,6 @@ fn main() -> Result<()> {
                 run_mode(runner::Mode::Plan, config, configs, quiet, prepared)
             }
         }
-        Some(Commands::List) => {
-            if let Some(pattern) = remotes {
-                run_remotes(&pattern, "list", config, &[])
-            } else if let Some(t) = target {
-                run_remote(&t, "list", config.clone(), &[])
-            } else {
-                run_list(config)
-            }
-        }
         Some(Commands::Run { name, args }) => {
             if remotes.is_some() || target.is_some() {
                 run_command_remote(config, name, args, target, remotes)
@@ -332,6 +321,14 @@ fn run_mode(mode: runner::Mode, config_path: Option<PathBuf>, configs: Vec<Strin
             println!("{}", c!(info, dimmed));
         }
         println!();
+    }
+
+    // Apply runtime vars from meta.toml before anything else.
+    // Use effective selectors (explicit or defaults) for scoped vars.
+    if let Some(ref vars) = meta.as_ref().and_then(|m| m.vars.as_ref()) {
+        let defaults = meta.as_ref().map(|m| &m.defaults[..]).unwrap_or(&[]);
+        let effective: &[String] = if configs.is_empty() { defaults } else { &configs };
+        config::apply_vars(vars, effective);
     }
 
     let config = config::load_for_apply(&resolved_path, &configs, meta.as_ref())?;
@@ -914,80 +911,6 @@ fn dir_size(path: &std::path::Path) -> u64 {
         }
     }
     total
-}
-
-fn run_list(config_path: Option<PathBuf>) -> Result<()> {
-    let path = resolve_config(config_path)?;
-    let meta = config::load_meta(&path);
-    let configs = config::list_configs(&path, meta.as_ref())?;
-
-    if configs.is_empty() {
-        println!("No config files found");
-        return Ok(());
-    }
-
-    let (default_configs, other_configs): (Vec<_>, Vec<_>) =
-        configs.into_iter().partition(|c| c.is_default);
-
-    output::print_header("Default configs");
-    println!();
-    for cfg in &default_configs {
-        print_config_entry(cfg);
-    }
-
-    if !other_configs.is_empty() {
-        println!();
-        output::print_header("Other configs");
-        println!();
-        for cfg in &other_configs {
-            print_config_entry(cfg);
-        }
-    }
-
-    // Show inventory info
-    if let Some(inv) = config::load_inventory(&path) {
-        if !inv.hosts.is_empty() {
-            println!("  {} - {}", c!("inventory", green), c!(format!("{} hosts", inv.hosts.len()), dimmed));
-        }
-    }
-
-    Ok(())
-}
-
-fn print_config_entry(cfg: &config::ConfigInfo) {
-    use config::eval_run_if;
-
-    let skipped = cfg.run_if.as_ref().map(|c| !eval_run_if(c)).unwrap_or(false);
-
-    let label = if cfg.name != cfg.key {
-        format!("{} ({})", cfg.key, cfg.name)
-    } else {
-        cfg.key.clone()
-    };
-
-    let labels_str = if cfg.labels.is_empty() {
-        String::new()
-    } else {
-        format!(" [{}]", cfg.labels.iter().map(|l| format!("@{}", l)).collect::<Vec<_>>().join(" "))
-    };
-
-    if skipped {
-        let desc = cfg.description.as_deref().unwrap_or("");
-        let suffix = if desc.is_empty() {
-            "(skipped)".to_string()
-        } else {
-            format!("{} (skipped)", desc)
-        };
-        print!("  {} - {}", c!(label, dimmed), c!(suffix, dimmed));
-    } else if let Some(ref d) = cfg.description {
-        print!("  {} - {}", c!(label, green), c!(d, dimmed));
-    } else {
-        print!("  {}", c!(label, green));
-    }
-    if !labels_str.is_empty() {
-        print!(" {}", c!(labels_str, dimmed));
-    }
-    println!();
 }
 
 fn run_command_remote(
@@ -1704,7 +1627,6 @@ fn print_rich_help(meta: Option<&config::Meta>, config_path: &PathBuf) -> Result
     println!("    {} {}  {}", c!("apply", white), c!("a", dimmed), c!("Apply configuration", dimmed));
     println!("    {} {}  {}", c!("check", white), c!("c", dimmed), c!("Check what would change (dry-run)", dimmed));
     println!("    {}  {}  {}", c!("plan", white), c!("p", dimmed), c!("List items from config", dimmed));
-    println!("    {}  {}  {}", c!("list", white), c!(" ", dimmed), c!("List available configs", dimmed));
     println!("    {}   {}  {}", c!("run", white), c!("r", dimmed), c!("Run a command from config", dimmed));
     println!("    {}  {}  {}", c!("test", white), c!("t", dimmed), c!("Test in container", dimmed));
     println!("    {} {}  {}", c!("exec", white), c!("dx", dimmed), c!("Run command in test container", dimmed));
@@ -1850,7 +1772,6 @@ _dek() {
         'c:Check what would change'
         'plan:List items from config'
         'p:List items from config'
-        'list:List available configs'
         'run:Run a command'
         'r:Run a command'
         'test:Test in container'
@@ -1916,7 +1837,7 @@ fn bash_completions() -> String {
     local cur prev words cword
     _init_completion || return
 
-    local commands="apply a check c plan p list run r test t exec dx bake setup completions"
+    local commands="apply a check c plan p run r test t exec dx bake setup completions"
 
     # Find the subcommand
     local cmd="" cmd_idx=0
@@ -1965,7 +1886,7 @@ complete -F _dek dek
 
 fn fish_completions() -> String {
     r#"# Subcommands
-set -l commands apply a check c plan p list run r test t exec dx bake setup completions
+set -l commands apply a check c plan p run r test t exec dx bake setup completions
 
 complete -c dek -n "not __fish_seen_subcommand_from $commands" -a apply -d 'Apply configuration'
 complete -c dek -n "not __fish_seen_subcommand_from $commands" -a a -d 'Apply configuration'
@@ -1973,7 +1894,6 @@ complete -c dek -n "not __fish_seen_subcommand_from $commands" -a check -d 'Chec
 complete -c dek -n "not __fish_seen_subcommand_from $commands" -a c -d 'Check what would change'
 complete -c dek -n "not __fish_seen_subcommand_from $commands" -a plan -d 'List items from config'
 complete -c dek -n "not __fish_seen_subcommand_from $commands" -a p -d 'List items from config'
-complete -c dek -n "not __fish_seen_subcommand_from $commands" -a list -d 'List available configs'
 complete -c dek -n "not __fish_seen_subcommand_from $commands" -a run -d 'Run a command'
 complete -c dek -n "not __fish_seen_subcommand_from $commands" -a r -d 'Run a command'
 complete -c dek -n "not __fish_seen_subcommand_from $commands" -a test -d 'Test in container'

@@ -415,6 +415,55 @@ pub fn apply_proxy(proxy: &ProxyConfig) {
     }
 }
 
+/// Apply runtime vars from meta.toml to the current process environment.
+/// Sets base vars first, then overlays vars matching active selectors.
+pub fn apply_vars(vars: &toml::Value, selectors: &[String]) {
+    let table = match vars.as_table() {
+        Some(t) => t,
+        None => return,
+    };
+
+    // Collect labels from selectors (strip @ prefix) and config keys
+    let active_labels: Vec<&str> = selectors.iter()
+        .filter(|s| s.starts_with('@'))
+        .map(|s| &s[1..])
+        .collect();
+    let active_keys: Vec<&str> = selectors.iter()
+        .filter(|s| !s.starts_with('@'))
+        .map(|s| s.as_str())
+        .collect();
+
+    // Pass 1: set base vars (string values at top level)
+    // Values are expanded so vars can reference earlier vars.
+    for (key, val) in table {
+        if let Some(s) = val.as_str() {
+            std::env::set_var(key, crate::util::expand_vars(s));
+        }
+    }
+
+    // Pass 2: overlay scoped vars from matching selectors
+    for (key, val) in table {
+        if !val.is_table() {
+            continue;
+        }
+        let matches = if key.starts_with('@') {
+            active_labels.contains(&&key[1..])
+        } else {
+            active_keys.contains(&key.as_str())
+        };
+        if !matches {
+            continue;
+        }
+        if let Some(sub) = val.as_table() {
+            for (k, v) in sub {
+                if let Some(s) = v.as_str() {
+                    std::env::set_var(k, crate::util::expand_vars(s));
+                }
+            }
+        }
+    }
+}
+
 /// Resolve config path - extracts tar.gz if needed, returns actual path for runner
 pub fn resolve_path<P: AsRef<Path>>(path: P) -> Result<PathBuf> {
     let path = path.as_ref();

@@ -143,9 +143,20 @@ impl Runner {
             let check = provider.check(item)?;
 
             if check.is_satisfied() {
+                // Cache key: if check passes and cache is fresh, skip silently.
+                // If check passes but cache is stale/missing, still skip apply
+                // but update the cache so next run is faster.
+                if is_cache_fresh(item) {
+                    output::print_apply_skip(item);
+                    continue;
+                }
+                update_cache(item);
                 output::print_apply_skip(item);
                 continue;
             }
+
+            // Check failed — if cache is fresh, something was removed/changed
+            // externally. Apply will run and cache updates on success.
 
             if provider.is_check_only() {
                 output::print_check_result(item, &check);
@@ -157,6 +168,7 @@ impl Runner {
 
             match provider.apply_live(item, &pb) {
                 Ok(()) => {
+                    update_cache(item);
                     output::finish_spinner_done(&pb, item);
                     changed += 1;
                 }
@@ -207,6 +219,29 @@ impl Runner {
     }
 }
 
+/// Returns the cache state item ID for a given item
+fn cache_item_id(item: &StateItem) -> String {
+    format!("{}:{}", item.kind, item.key)
+}
+
+/// Check if cache_key is fresh (value unchanged since last apply).
+/// Returns true if the item should be skipped.
+fn is_cache_fresh(item: &StateItem) -> bool {
+    let key = match &item.cache_key {
+        Some(k) => k,
+        None => return false,
+    };
+    let id = cache_item_id(item);
+    crate::cache::get_state(&id).as_deref() == Some(key.as_str())
+}
+
+/// Store cache_key value after successful apply
+fn update_cache(item: &StateItem) {
+    if let Some(ref key) = item.cache_key {
+        crate::cache::set_state(&cache_item_id(item), key);
+    }
+}
+
 fn should_run(item: &StateItem) -> bool {
     match &item.run_if {
         None => true,
@@ -220,11 +255,16 @@ fn should_run(item: &StateItem) -> bool {
     }
 }
 
+fn ev(s: &str) -> String {
+    crate::util::expand_vars(s)
+}
+
 fn resolve_source_path(src: &str, base_dir: &Path) -> String {
-    if src.starts_with('/') || src.starts_with('~') {
-        src.to_string()
+    let expanded = ev(src);
+    if expanded.starts_with('/') || expanded.starts_with('~') {
+        expanded
     } else {
-        base_dir.join(src).to_string_lossy().to_string()
+        base_dir.join(&expanded).to_string_lossy().to_string()
     }
 }
 
@@ -292,7 +332,8 @@ fn collect_state_items(config: &Config, base_dir: &Path) -> Vec<StateItem> {
         items.push(
             StateItem::new("service", &svc.name)
                 .with_value(value)
-                .with_run_if(svc.run_if.clone()),
+                .with_run_if(svc.run_if.clone())
+                .with_cache_key(svc.cache_key.clone(), svc.cache_key_cmd.clone()),
         );
     }
 
@@ -301,26 +342,25 @@ fn collect_state_items(config: &Config, base_dir: &Path) -> Vec<StateItem> {
         if let Some(ref copy) = file.copy {
             for (src, dst) in copy {
                 let src_resolved = resolve_source_path(src, base_dir);
-                items.push(StateItem::new("file.copy", &src_resolved).with_value(dst));
+                items.push(StateItem::new("file.copy", &src_resolved).with_value(ev(dst)));
             }
         }
         if let Some(ref fetch) = file.fetch {
             for (url, target) in fetch {
-                // Encode: path\x00ttl (ttl may be empty)
-                let value = format!("{}\x00{}", target.path(), target.ttl().unwrap_or(""));
-                items.push(StateItem::new("file.fetch", url).with_value(value));
+                let value = format!("{}\x00{}", ev(target.path()), target.ttl().unwrap_or(""));
+                items.push(StateItem::new("file.fetch", ev(url)).with_value(value));
             }
         }
         if let Some(ref symlink) = file.symlink {
             for (src, dst) in symlink {
                 let src_resolved = resolve_source_path(src, base_dir);
-                items.push(StateItem::new("file.symlink", &src_resolved).with_value(dst));
+                items.push(StateItem::new("file.symlink", &src_resolved).with_value(ev(dst)));
             }
         }
         if let Some(ref ensure_line) = file.ensure_line {
             for (file, lines) in ensure_line {
                 let value = lines.join("\n");
-                items.push(StateItem::new("file.ensure_line", file).with_value(value));
+                items.push(StateItem::new("file.ensure_line", ev(file)).with_value(value));
             }
         }
         for entry in &file.line {
@@ -329,7 +369,6 @@ fn collect_state_items(config: &Config, base_dir: &Path) -> Vec<StateItem> {
                 FileLineMode::Replace => "replace",
                 FileLineMode::Below => "below",
             };
-            // Encode: line\x01original\x01mode\x01match_type
             let (original, match_type) = if let Some(ref re) = entry.original_regex {
                 (re.as_str(), "regex")
             } else {
@@ -337,9 +376,10 @@ fn collect_state_items(config: &Config, base_dir: &Path) -> Vec<StateItem> {
             };
             let value = format!("{}\x01{}\x01{}\x01{}", entry.line, original, mode, match_type);
             items.push(
-                StateItem::new("file.line", &entry.path)
+                StateItem::new("file.line", ev(&entry.path))
                     .with_value(value)
-                    .with_run_if(entry.run_if.clone()),
+                    .with_run_if(entry.run_if.clone())
+                    .with_cache_key(entry.cache_key.clone(), entry.cache_key_cmd.clone()),
             );
         }
     }
@@ -354,7 +394,7 @@ fn collect_state_items(config: &Config, base_dir: &Path) -> Vec<StateItem> {
     // Env
     if let Some(ref env) = config.env {
         for (name, value) in env {
-            items.push(StateItem::new("env", name).with_value(value));
+            items.push(StateItem::new("env", name).with_value(ev(value)));
         }
     }
 
@@ -383,7 +423,8 @@ fn collect_state_items(config: &Config, base_dir: &Path) -> Vec<StateItem> {
         items.push(
             StateItem::new("command", &cmd.name)
                 .with_value(value)
-                .with_run_if(cmd.run_if.clone()),
+                .with_run_if(cmd.run_if.clone())
+                .with_cache_key(cmd.cache_key.clone(), cmd.cache_key_cmd.clone()),
         );
     }
 

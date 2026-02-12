@@ -153,6 +153,66 @@ Download files from URLs. Results are cached at `~/.cache/dek/url/`. Use `ttl` t
 
 Supported TTL units: `s` (seconds), `m` (minutes), `h` (hours), `d` (days). Can be combined: `1h30m`.
 
+## Vars
+
+Runtime variables defined in `meta.toml`, set in the process environment before anything runs. Available to all providers, commands, scripts — locally and remotely.
+
+```toml
+# meta.toml
+[vars]
+APP_NAME = "myapp"
+DEPLOY_DIR = "/opt/default"
+
+# Scoped by @label — applied when that label is selected
+[vars."@staging"]
+DEPLOY_DIR = "/opt/staging"
+DB_HOST = "staging-db"
+
+[vars."@production"]
+DEPLOY_DIR = "/opt/production"
+DB_HOST = "prod-db"
+
+# Scoped by config key
+[vars.deploy]
+NOTIFY = "true"
+```
+
+Base vars are always set. Scoped vars overlay when their selector is active:
+
+```bash
+dek apply @staging    # APP_NAME=myapp DEPLOY_DIR=/opt/staging DB_HOST=staging-db
+dek apply @production # APP_NAME=myapp DEPLOY_DIR=/opt/production DB_HOST=prod-db
+dek apply deploy      # APP_NAME=myapp DEPLOY_DIR=/opt/default NOTIFY=true
+```
+
+Vars are inherited by all child processes, so `[[command]]` check/apply, `[script]`, and remote `dek apply` all see them.
+
+## Cache Key
+
+Skip steps when a value hasn't changed since last successful apply. Works on `[[command]]`, `[[service]]`, and `[[file.line]]`.
+
+**`cache_key`** — a string value (supports `$VAR` expansion):
+
+```toml
+[[command]]
+name = "generate test data"
+check = "test -f /opt/test/input.csv"
+apply = "generate-data.sh"
+cache_key = "$INPUT_FILE_SIZE_MB"  # only re-runs when size changes
+```
+
+**`cache_key_cmd`** — a command whose stdout is the cache key:
+
+```toml
+[[command]]
+name = "deploy jar"
+check = "test -f /opt/dpi/jar/dpi.jar"
+apply = "cp build/dpi.jar /opt/dpi/jar/"
+cache_key_cmd = "sha256sum build/dpi.jar"  # only re-deploys when jar changes
+```
+
+Cache state is stored in `~/.cache/dek/state/`. The provider's `check` always runs — if the state is missing (e.g. file deleted), apply runs regardless of cache. The cache key only skips the apply when check already passes and the key is unchanged. After a successful apply (or when check passes with a new key), the current value is stored.
+
 ## Assertions
 
 Assertions are check-only items — they report issues but don't change anything. Two modes:

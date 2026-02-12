@@ -352,6 +352,53 @@ pub fn run_install_script(url: &str, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
+/// Expand environment variables in a string: $VAR and ${VAR}.
+/// Only expands $NAME and ${NAME} patterns. Other $ uses ($(...), $$, etc.) are preserved.
+pub fn expand_vars(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '$' {
+            if chars.peek() == Some(&'{') {
+                chars.next(); // skip {
+                let name: String = chars.by_ref().take_while(|&c| c != '}').collect();
+                match std::env::var(&name) {
+                    Ok(val) => result.push_str(&val),
+                    Err(_) => {
+                        result.push('$');
+                        result.push('{');
+                        result.push_str(&name);
+                        result.push('}');
+                    }
+                }
+            } else if chars.peek().map(|c| c.is_ascii_alphabetic() || *c == '_').unwrap_or(false) {
+                let mut name = String::new();
+                while let Some(&c) = chars.peek() {
+                    if c.is_ascii_alphanumeric() || c == '_' {
+                        name.push(c);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                match std::env::var(&name) {
+                    Ok(val) => result.push_str(&val),
+                    Err(_) => {
+                        result.push('$');
+                        result.push_str(&name);
+                    }
+                }
+            } else {
+                // Not a var reference ($(...), $$, $!, etc.) — preserve as-is
+                result.push('$');
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
 /// Parse a human-readable duration string (e.g. "1h", "30m", "1d", "1h30m")
 pub fn parse_duration(s: &str) -> Result<std::time::Duration> {
     let mut total_secs: u64 = 0;

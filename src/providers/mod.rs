@@ -41,6 +41,7 @@ pub struct StateItem {
     pub key: String,
     pub value: Option<String>,
     pub run_if: Option<String>,
+    pub cache_key: Option<String>,
 }
 
 impl StateItem {
@@ -50,6 +51,7 @@ impl StateItem {
             key: key.into(),
             value: None,
             run_if: None,
+            cache_key: None,
         }
     }
 
@@ -61,6 +63,28 @@ impl StateItem {
     pub fn with_run_if(mut self, run_if: Option<String>) -> Self {
         self.run_if = run_if;
         self
+    }
+
+    pub fn with_cache_key(mut self, cache_key: Option<String>, cache_key_cmd: Option<String>) -> Self {
+        self.cache_key = resolve_cache_key(cache_key, cache_key_cmd);
+        self
+    }
+}
+
+/// Resolve cache key: prefer cache_key_cmd (run command), fall back to cache_key (expand vars)
+fn resolve_cache_key(key: Option<String>, cmd: Option<String>) -> Option<String> {
+    if let Some(cmd) = cmd {
+        let output = std::process::Command::new("sh")
+            .args(["-c", &cmd])
+            .output()
+            .ok()?;
+        if output.status.success() {
+            Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        } else {
+            None
+        }
+    } else {
+        key.map(|k| crate::util::expand_vars(&k))
     }
 }
 

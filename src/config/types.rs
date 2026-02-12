@@ -21,6 +21,11 @@ pub struct Meta {
     /// Test container settings
     #[serde(default)]
     pub test: Option<TestConfig>,
+    /// Runtime variables set via std::env::set_var before any items run.
+    /// Base vars are plain key=value, scoped vars are sub-tables keyed by
+    /// selector (@label or config key).
+    #[serde(default)]
+    pub vars: Option<toml::Value>,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -126,6 +131,10 @@ pub struct ServiceConfig {
     pub scope: String,
     #[serde(default)]
     pub run_if: Option<String>,
+    #[serde(default)]
+    pub cache_key: Option<String>,
+    #[serde(default)]
+    pub cache_key_cmd: Option<String>,
 }
 
 fn default_service_scope() -> String {
@@ -186,6 +195,10 @@ pub struct FileLineConfig {
     pub mode: FileLineMode,
     #[serde(default)]
     pub run_if: Option<String>,
+    #[serde(default)]
+    pub cache_key: Option<String>,
+    #[serde(default)]
+    pub cache_key_cmd: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -207,6 +220,12 @@ pub struct CommandConfig {
     pub apply: String,
     #[serde(default)]
     pub run_if: Option<String>,
+    /// Skip if this value (supports $VAR) hasn't changed since last apply
+    #[serde(default)]
+    pub cache_key: Option<String>,
+    /// Skip if this command's output hasn't changed since last apply
+    #[serde(default)]
+    pub cache_key_cmd: Option<String>,
 }
 
 /// Runnable command (dek run <name>)
