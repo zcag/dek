@@ -295,6 +295,9 @@ pub struct ArtifactConfig {
     pub src: String,
     /// Destination path within config (included in tarball/bake)
     pub dest: String,
+    /// Local dependencies needed before build (e.g. "maven:mvn", "apt.default-jdk:java")
+    #[serde(default)]
+    pub deps: Vec<String>,
 }
 
 /// Assertion to check before apply

@@ -758,6 +758,7 @@ pub(crate) fn prepare_config(config_path: &std::path::Path, dek_config: &config:
             };
 
             if should_build {
+                resolve_artifact_deps(&artifact.deps)?;
                 let pb = output::start_artifact_spinner(label);
                 let result = util::run_cmd_live_dir("sh", &["-c", &artifact.build], &pb, base_dir)?;
                 if !result.status.success() {
@@ -825,6 +826,39 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<()
             copy_dir_recursive(&src_path, &dst_path)?;
         } else {
             fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Resolve local dependencies for artifact builds.
+/// Specs: "pkg:bin" (auto-detect PM), "apt.pkg:bin", "pacman.pkg:bin", etc.
+fn resolve_artifact_deps(deps: &[String]) -> Result<()> {
+    use owo_colors::OwoColorize;
+    for dep in deps {
+        let (provider, spec) = if let Some((p, s)) = dep.split_once('.') {
+            (Some(p), s)
+        } else {
+            (None, dep.as_str())
+        };
+        let (pkg, bin) = util::parse_spec(spec);
+        if util::command_exists(&bin) {
+            continue;
+        }
+        println!("    {} installing {} (for {})...", c!("→", yellow), pkg, bin);
+        match provider {
+            Some("apt") => util::SysPkgManager::Apt.install(&pkg)?,
+            Some("pacman") => util::SysPkgManager::Pacman.install(&pkg)?,
+            Some("brew") => util::SysPkgManager::Brew.install(&pkg)?,
+            None | Some("os") => {
+                let pm = util::SysPkgManager::detect()
+                    .ok_or_else(|| anyhow::anyhow!("No package manager found to install '{}'", dep))?;
+                pm.install(&pkg)?;
+            }
+            Some(p) => anyhow::bail!("Unknown package manager '{}' in dep '{}'", p, dep),
+        }
+        if !util::command_exists(&bin) {
+            anyhow::bail!("Installed '{}' but '{}' not found in PATH", pkg, bin);
         }
     }
     Ok(())
