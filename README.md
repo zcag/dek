@@ -19,7 +19,6 @@ dek setup
 dek apply              # apply ./dek.toml or ./dek/
 dek check              # dry-run, show what would change
 dek plan               # list items (no state check)
-dek list               # list available configs
 dek run <name>         # run a command from config
 dek test               # test in container
 dek exec <cmd>         # run command in test container
@@ -445,6 +444,19 @@ Artifacts are resolved before any config processing — they work with `apply`, 
 Freshness can be determined two ways:
 - **`watch`** — list of files/directories to hash (path + size + mtime). Build is skipped when the hash matches the previous run. Best for source trees.
 - **`check`** — shell command that exits 0 if the artifact is fresh. Use for custom logic (e.g., `test target/app.jar -nt pom.xml`).
+
+**`deps`** — local dependencies needed before build. Ensures build tools exist on the machine running the build:
+
+```toml
+[[artifact]]
+name = "app.jar"
+build = "mvn package -DskipTests -q"
+deps = ["apt.default-jdk:java", "apt.maven:mvn"]
+src = "target/app-1.0.jar"
+dest = "artifacts/app.jar"
+```
+
+Format: `"package:binary"` — installs `package` if `binary` isn't in PATH. Prefix with package manager (`apt.`, `pacman.`, `brew.`) to force a specific one, or omit for auto-detection (`os.`).
 
 ## Inline
 

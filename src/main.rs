@@ -955,6 +955,13 @@ fn run_command_remote(
 
     let path = resolve_config(config_path)?;
     let resolved_path = config::resolve_path(&path)?;
+
+    // Apply runtime vars from meta.toml
+    let meta = config::load_meta(&resolved_path);
+    if let Some(ref vars) = meta.as_ref().and_then(|m| m.vars.as_ref()) {
+        config::apply_vars(vars, &[]);
+    }
+
     let cfg = config::load_all(&resolved_path)?;
 
     // If no name, list available commands
@@ -1165,6 +1172,13 @@ fn run_command(config_path: Option<PathBuf>, name: Option<String>, args: Vec<Str
 
     let path = resolve_config(config_path)?;
     let resolved_path = config::resolve_path(&path)?;
+
+    // Apply runtime vars from meta.toml
+    let meta = config::load_meta(&resolved_path);
+    if let Some(ref vars) = meta.as_ref().and_then(|m| m.vars.as_ref()) {
+        config::apply_vars(vars, &[]);
+    }
+
     let config = config::load_all(&resolved_path)?;
 
     // If no name provided, list available commands
