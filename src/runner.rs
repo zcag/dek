@@ -143,16 +143,13 @@ impl Runner {
             let check = provider.check(item)?;
 
             if check.is_satisfied() {
-                // Cache key: if check passes and cache is fresh, skip silently.
-                // If check passes but cache is stale/missing, still skip apply
-                // but update the cache so next run is faster.
-                if is_cache_fresh(item) {
+                // Cache key present and stale → re-apply (config changed).
+                // No cache key, or cache fresh → skip.
+                if !item.cache_key.is_some() || is_cache_fresh(item) {
                     output::print_apply_skip(item);
                     continue;
                 }
-                update_cache(item);
-                output::print_apply_skip(item);
-                continue;
+                // fall through to apply
             }
 
             // Check failed — if cache is fresh, something was removed/changed

@@ -417,6 +417,8 @@ impl RemotePayload {
 fn run_remote(target: &str, cmd: &str, config_path: Option<PathBuf>, configs: &[String]) -> Result<()> {
     let config_path = resolve_config(config_path)?;
     let config_abs = std::fs::canonicalize(&config_path)?;
+    let meta = config::load_meta(&config_path);
+    let remote_install = meta.as_ref().map(|m| m.remote_install).unwrap_or(false);
 
     output::print_header(&format!("{} on {}", cmd, target));
     println!();
@@ -438,7 +440,7 @@ fn run_remote(target: &str, cmd: &str, config_path: Option<PathBuf>, configs: &[
     );
     println!();
 
-    let result = deploy_to_host(target, cmd, configs, &payload, None)?;
+    let result = deploy_to_host(target, cmd, configs, &payload, None, remote_install)?;
 
     // Print full remote output for single-host
     for line in result.output.lines() {
@@ -467,7 +469,7 @@ struct DeployResult {
 
 fn deploy_to_host(
     target: &str, cmd: &str, configs: &[String], payload: &RemotePayload,
-    pb: Option<&indicatif::ProgressBar>,
+    pb: Option<&indicatif::ProgressBar>, remote_install: bool,
 ) -> Result<DeployResult> {
     let start = std::time::Instant::now();
     let remote_dir = "/tmp/dek-remote";
@@ -523,6 +525,15 @@ fn deploy_to_host(
         bail!("Failed to rsync config to {}: {}", target, err.trim());
     }
 
+    // Symlink config + binary so `dek` works standalone on remote
+    if remote_install {
+        let link_cmd = format!(
+            "mkdir -p ~/.config ~/.local/bin && ln -sfn {} ~/.config/dek && ln -sf {} ~/.local/bin/dek",
+            remote_config.trim_end_matches('/'), remote_bin
+        );
+        let _ = Command::new("ssh").args([target, &link_cmd]).output();
+    }
+
     // Run dek on remote
     update(&format!("running {}...", cmd));
     let configs_arg = configs.join(" ");
@@ -552,6 +563,8 @@ fn run_remotes(pattern: &str, cmd: &str, config_path: Option<PathBuf>, configs: 
 
     let config_path = resolve_config(config_path.clone())?;
     let config_abs = std::fs::canonicalize(&config_path)?;
+    let meta = config::load_meta(&config_path);
+    let remote_install = meta.as_ref().map(|m| m.remote_install).unwrap_or(false);
     let inventory = config::load_inventory(&config_path)
         .ok_or_else(|| anyhow::anyhow!("No inventory.ini found in config directory"))?;
 
@@ -663,7 +676,7 @@ fn run_remotes(pattern: &str, cmd: &str, config_path: Option<PathBuf>, configs: 
             let configs = configs;
             let pb = &spinners[i];
             s.spawn(move || {
-                let result = deploy_to_host(host, cmd, configs, payload, Some(pb));
+                let result = deploy_to_host(host, cmd, configs, payload, Some(pb), remote_install);
                 let _ = tx.send((i, result));
             });
         }
@@ -999,6 +1012,24 @@ fn dir_size(path: &std::path::Path) -> u64 {
     total
 }
 
+fn shell_escape(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+fn collect_var_exports(meta: Option<&config::Meta>) -> String {
+    let vars = match meta.and_then(|m| m.vars.as_ref()).and_then(|v| v.as_table()) {
+        Some(t) => t,
+        None => return String::new(),
+    };
+    let mut exports = Vec::new();
+    for (k, v) in vars {
+        if let Some(s) = v.as_str() {
+            exports.push(format!("export {}={}", k, shell_escape(s)));
+        }
+    }
+    if exports.is_empty() { String::new() } else { format!("{}; ", exports.join("; ")) }
+}
+
 fn run_command_remote(
     config_path: Option<PathBuf>, name: Option<String>, args: Vec<String>,
     target: Option<String>, remotes: Option<String>,
@@ -1063,10 +1094,11 @@ fn run_command_remote(
     };
 
     // Append extra args
+    let export_prefix = collect_var_exports(meta.as_ref());
     let full_cmd = if args.is_empty() {
-        shell_cmd
+        format!("{}{}", export_prefix, shell_cmd)
     } else {
-        format!("{} {}", shell_cmd, args.join(" "))
+        format!("{}{} {}", export_prefix, shell_cmd, args.join(" "))
     };
 
     // Resolve hosts
@@ -1520,8 +1552,10 @@ fn run_test(
                 // Resolve relative host paths against config dir
                 if let Some((host, rest)) = m.split_once(':') {
                     if !host.starts_with('/') && !host.starts_with('~') {
-                        let abs = config_dir.join(host).canonicalize()
-                            .unwrap_or_else(|_| config_dir.join(host));
+                        let joined = config_dir.join(host);
+                        // Create dir so canonicalize works (Docker needs absolute paths)
+                        let _ = std::fs::create_dir_all(&joined);
+                        let abs = joined.canonicalize().unwrap_or(joined);
                         return format!("{}:{}", abs.display(), rest);
                     }
                 }

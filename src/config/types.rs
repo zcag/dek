@@ -23,6 +23,9 @@ pub struct Meta {
     /// Test container settings
     #[serde(default)]
     pub test: Option<TestConfig>,
+    /// Symlink config + binary on remote so `dek` works standalone after deploy
+    #[serde(default)]
+    pub remote_install: bool,
     /// Runtime variables set via std::env::set_var before any items run.
     /// Base vars are plain key=value, scoped vars are sub-tables keyed by
     /// selector (@label or config key).
