@@ -210,7 +210,7 @@ apply = "cp build/dpi.jar /opt/dpi/jar/"
 cache_key_cmd = "sha256sum build/dpi.jar"  # only re-deploys when jar changes
 ```
 
-Cache state is stored in `~/.cache/dek/state/`. The provider's `check` always runs — if the state is missing (e.g. file deleted), apply runs regardless of cache. The cache key only skips the apply when check already passes and the key is unchanged. After a successful apply (or when check passes with a new key), the current value is stored.
+Cache state is stored in `~/.cache/dek/state/`. The provider's `check` always runs — if the state is missing (e.g. file deleted), apply runs regardless of cache. When check passes and the cache key is unchanged, apply is skipped. When the cache key changes (e.g. a `$VAR` in `meta.toml` was updated), apply re-runs even if check still passes — this lets you force re-apply by changing a var.
 
 ## Assertions
 
@@ -287,12 +287,15 @@ Files merged alphabetically. Use `dek apply extra` to include optional configs.
 name = "myproject"
 description = "Project deployment"
 version = "1.0"
+min_version = "0.1.28"               # auto-update dek if older
 defaults = ["@setup", "@deploy"]     # default selectors for apply
 inventory = "../devops/inventory.ini" # custom inventory path
+remote_install = true                # symlink dek + config on remote hosts
 
 [test]
 image = "ubuntu:22.04"
 keep = true
+mount = ["./data:/opt/data"]         # bind mounts for test container
 ```
 
 ### Labels & Selectors
@@ -370,6 +373,7 @@ dek run logs -t server1           # tty command (interactive)
 - **`-t`** — single host, prints output directly. With `tty: true`, uses `ssh -t` for interactive commands.
 - **`-r`** — multi-host from inventory, runs in parallel with progress spinners. `tty: true` commands are rejected (can't attach TTY to multiple hosts).
 - **`confirm: true`** — prompts `[y/N]` before running (works both locally and remotely).
+- **Vars** — base vars from `meta.toml` `[vars]` are exported to the remote shell automatically, so `$VAR` references in remote commands resolve correctly.
 
 ## Remote
 
@@ -407,6 +411,17 @@ Hosts are deployed in parallel. Override inventory path in `meta.toml`:
 ```toml
 inventory = "../devops/inventory.ini"
 ```
+
+### Remote Install
+
+With `remote_install = true` in `meta.toml`, dek symlinks itself and the config on remote hosts after deploy:
+
+```
+~/.local/bin/dek → /tmp/dek-remote/dek
+~/.config/dek   → /tmp/dek-remote/config/
+```
+
+This lets you run `dek` directly on the remote (e.g. `dek run`, `dek list`) without re-deploying.
 
 ### Deploy Workflow
 
@@ -458,6 +473,16 @@ dest = "artifacts/app.jar"
 
 Format: `"package:binary"` — installs `package` if `binary` isn't in PATH. Prefix with package manager (`apt.`, `pacman.`, `brew.`) to force a specific one, or omit for auto-detection (`os.`).
 
+## Auto Update
+
+Set `min_version` in `meta.toml` to ensure all users/hosts run a compatible version:
+
+```toml
+min_version = "0.1.28"
+```
+
+If the running dek is older, it auto-updates via `cargo-binstall` (preferred) or `cargo install`, then exits with a prompt to rerun.
+
 ## Inline
 
 Quick installs without a config file:
@@ -499,7 +524,10 @@ Configure defaults in `meta.toml`:
 ```toml
 [test]
 image = "ubuntu:22.04"
+mount = ["./data:/opt/data", "/host/path:/container/path"]
 ```
+
+Mounts are bind-mounted into the test container. Relative host paths are resolved against the config directory.
 
 CLI flags override meta.toml (`-i/--image`, `-r/--rm`).
 
