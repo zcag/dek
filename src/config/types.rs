@@ -74,6 +74,9 @@ pub struct Config {
     /// Build artifacts (resolved before bake/deploy)
     #[serde(default)]
     pub artifact: Vec<ArtifactConfig>,
+    /// State probes (dek state)
+    #[serde(default)]
+    pub state: Vec<StateConfig>,
 }
 
 /// Proxy configuration
@@ -306,6 +309,23 @@ pub struct ArtifactConfig {
     /// Local dependencies needed before build (e.g. "maven:mvn", "apt.default-jdk:java")
     #[serde(default)]
     pub deps: Vec<String>,
+}
+
+/// State probe (dek state)
+#[derive(Debug, Deserialize, Clone)]
+pub struct StateConfig {
+    pub name: String,
+    pub cmd: String,
+    #[serde(default)]
+    pub rewrite: Vec<RewriteRule>,
+}
+
+/// Rewrite rule for state probes
+#[derive(Debug, Deserialize, Clone)]
+pub struct RewriteRule {
+    #[serde(rename = "match")]
+    pub pattern: String,
+    pub value: String,
 }
 
 /// Assertion to check before apply

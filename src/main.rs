@@ -139,6 +139,18 @@ enum Commands {
         #[arg(short, long, default_value = "dek-baked")]
         output: PathBuf,
     },
+    /// Query system state probes
+    #[command(alias = "s")]
+    State {
+        /// Probe name (omit to list all)
+        name: Option<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+        /// Extra args: "is <val>" or "isnot <val>"
+        #[arg(trailing_var_arg = true)]
+        args: Vec<String>,
+    },
     /// Generate shell completions (raw output)
     Completions {
         /// Shell to generate completions for
@@ -233,6 +245,7 @@ fn main() -> Result<()> {
         }
         Some(Commands::Test { image, rm, fresh, attach, selectors }) => run_test(config, image, rm, fresh, attach, selectors),
         Some(Commands::Exec { cmd }) => run_exec(config, cmd),
+        Some(Commands::State { name, json, args }) => run_state(config, name, json, args),
         Some(Commands::Bake { config: bake_config, output }) => {
             bake::run(bake_config.or(config), output)
         }
@@ -1679,6 +1692,136 @@ fn docker_shell(name: &str) -> Result<()> {
     Ok(())
 }
 
+fn eval_probe(probe: &config::StateConfig) -> String {
+    let output = Command::new("sh")
+        .args(["-c", &probe.cmd])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok();
+    let raw = output
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+
+    for rule in &probe.rewrite {
+        if let Ok(re) = regex::Regex::new(&rule.pattern) {
+            if re.is_match(&raw) {
+                return rule.value.clone();
+            }
+        }
+    }
+    raw
+}
+
+fn run_state(config_path: Option<PathBuf>, name: Option<String>, json: bool, args: Vec<String>) -> Result<()> {
+    let path = resolve_config(config_path)?;
+    let resolved_path = config::resolve_path(&path)?;
+    let cfg = config::load_all(&resolved_path)?;
+
+    if cfg.state.is_empty() {
+        bail!("No state probes defined in config");
+    }
+
+    // --json may end up in args due to trailing_var_arg
+    let json = json || args.iter().any(|a| a == "--json");
+    let args: Vec<String> = args.into_iter().filter(|a| a != "--json").collect();
+
+    // Collect all requested names
+    let mut names: Vec<String> = Vec::new();
+    if let Some(ref n) = name {
+        names.push(n.clone());
+    }
+
+    // Detect operator mode (is/isnot/get)
+    let has_op = name.is_some()
+        && !args.is_empty()
+        && matches!(args[0].as_str(), "is" | "isnot" | "get");
+
+    if !has_op {
+        names.extend(args.iter().cloned());
+    }
+
+    // Operator mode: single probe
+    if has_op {
+        let probe_name = name.as_ref().unwrap();
+        let probe = cfg.state.iter()
+            .find(|p| p.name == *probe_name)
+            .ok_or_else(|| anyhow::anyhow!("Unknown state probe: {}", probe_name))?;
+        let value = eval_probe(probe);
+        let op = &args[0];
+        match op.as_str() {
+            "is" => {
+                let expected = args.get(1)
+                    .ok_or_else(|| anyhow::anyhow!("Missing value after 'is'"))?;
+                if value != *expected { std::process::exit(1); }
+            }
+            "isnot" => {
+                let expected = args.get(1)
+                    .ok_or_else(|| anyhow::anyhow!("Missing value after 'isnot'"))?;
+                if value == *expected { std::process::exit(1); }
+            }
+            "get" => {
+                if args.len() < 3 {
+                    bail!("Usage: dek state <name> get <val>... <default>");
+                }
+                let allowed = &args[1..args.len() - 1];
+                let fallback = &args[args.len() - 1];
+                if allowed.iter().any(|a| a == &value) {
+                    print!("{}", value);
+                } else {
+                    print!("{}", fallback);
+                }
+            }
+            _ => {}
+        }
+        return Ok(());
+    }
+
+    // Filter probes
+    let probes: Vec<&config::StateConfig> = if names.is_empty() {
+        cfg.state.iter().collect()
+    } else {
+        let mut selected = Vec::new();
+        for n in &names {
+            let probe = cfg.state.iter()
+                .find(|p| p.name == *n)
+                .ok_or_else(|| anyhow::anyhow!("Unknown state probe: {}", n))?;
+            selected.push(probe);
+        }
+        selected
+    };
+
+    // Single probe, no json → plain value
+    if probes.len() == 1 && !json && names.len() == 1 {
+        println!("{}", eval_probe(probes[0]));
+        return Ok(());
+    }
+
+    // Parallel eval, config order
+    let results: Vec<(String, String)> = std::thread::scope(|s| {
+        let handles: Vec<_> = probes.iter().map(|probe| {
+            s.spawn(|| (probe.name.clone(), eval_probe(probe)))
+        }).collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+
+    if json {
+        let mut map = serde_json::Map::new();
+        for (k, v) in results {
+            map.insert(k, serde_json::Value::String(v));
+        }
+        println!("{}", serde_json::Value::Object(map));
+    } else {
+        let max_name = results.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
+        for (name, value) in &results {
+            println!("  {:>width$}  {}",
+                c!(name, cyan), c!(value, bold),
+                width = max_name);
+        }
+    }
+    Ok(())
+}
+
 fn run_setup() -> Result<()> {
     use std::fs;
 
@@ -1793,6 +1936,7 @@ fn print_rich_help(meta: Option<&config::Meta>, config_path: &PathBuf) -> Result
     println!("    {}   {}  {}", c!("run", white), c!("r", dimmed), c!("Run a command from config", dimmed));
     println!("    {}  {}  {}", c!("test", white), c!("t", dimmed), c!("Test in container", dimmed));
     println!("    {} {}  {}", c!("exec", white), c!("dx", dimmed), c!("Run command in test container", dimmed));
+    println!("    {} {}  {}", c!("state", white), c!("s", dimmed), c!("Query system state probes", dimmed));
     println!("    {}  {}  {}", c!("bake", white), c!(" ", dimmed), c!("Bake into standalone binary", dimmed));
     println!();
 
@@ -1906,6 +2050,12 @@ fn run_complete(config_path: Option<PathBuf>, what: &str) -> Result<()> {
                 }
             }
         }
+        "state" => {
+            let config = config::load_all(&resolved).unwrap_or_default();
+            for probe in &config.state {
+                println!("{}", probe.name);
+            }
+        }
         _ => {}
     }
     Ok(())
@@ -1926,6 +2076,12 @@ _dek_run_cmds() {
     [[ -n "$items" ]] && compadd -- $items
 }
 
+_dek_state_probes() {
+    local -a items
+    items=(${(f)"$(dek _complete state 2>/dev/null)"})
+    [[ -n "$items" ]] && compadd -- $items
+}
+
 _dek() {
     local curcontext="$curcontext" state
     local -a commands=(
@@ -1942,6 +2098,8 @@ _dek() {
         'exec:Run in test container'
         'dx:Run in test container'
         'bake:Bake into standalone binary'
+        'state:Query system state'
+        's:Query system state'
         'setup:Install completions'
         'completions:Generate raw completions'
     )
@@ -1966,6 +2124,9 @@ _dek() {
                     ;;
                 run|r)
                     (( CURRENT == 2 )) && _dek_run_cmds
+                    ;;
+                state|s)
+                    (( CURRENT == 2 )) && _dek_state_probes
                     ;;
                 test|t)
                     _arguments \
@@ -2000,7 +2161,7 @@ fn bash_completions() -> String {
     local cur prev words cword
     _init_completion || return
 
-    local commands="apply a check c plan p run r test t exec dx bake setup completions"
+    local commands="apply a check c plan p run r state s test t exec dx bake setup completions"
 
     # Find the subcommand
     local cmd="" cmd_idx=0
@@ -2027,6 +2188,11 @@ fn bash_completions() -> String {
                 COMPREPLY=($(compgen -W "$(dek _complete run 2>/dev/null)" -- "$cur"))
             fi
             ;;
+        state|s)
+            if [[ $cword -eq $((cmd_idx+1)) ]]; then
+                COMPREPLY=($(compgen -W "$(dek _complete state 2>/dev/null)" -- "$cur"))
+            fi
+            ;;
         test|t)
             case $prev in
                 -i|--image) return ;;
@@ -2049,7 +2215,7 @@ complete -F _dek dek
 
 fn fish_completions() -> String {
     r#"# Subcommands
-set -l commands apply a check c plan p run r test t exec dx bake setup completions
+set -l commands apply a check c plan p run r state s test t exec dx bake setup completions
 
 complete -c dek -n "not __fish_seen_subcommand_from $commands" -a apply -d 'Apply configuration'
 complete -c dek -n "not __fish_seen_subcommand_from $commands" -a a -d 'Apply configuration'
@@ -2063,6 +2229,8 @@ complete -c dek -n "not __fish_seen_subcommand_from $commands" -a test -d 'Test 
 complete -c dek -n "not __fish_seen_subcommand_from $commands" -a t -d 'Test in container'
 complete -c dek -n "not __fish_seen_subcommand_from $commands" -a exec -d 'Run in test container'
 complete -c dek -n "not __fish_seen_subcommand_from $commands" -a dx -d 'Run in test container'
+complete -c dek -n "not __fish_seen_subcommand_from $commands" -a state -d 'Query system state'
+complete -c dek -n "not __fish_seen_subcommand_from $commands" -a s -d 'Query system state'
 complete -c dek -n "not __fish_seen_subcommand_from $commands" -a bake -d 'Bake into standalone binary'
 complete -c dek -n "not __fish_seen_subcommand_from $commands" -a setup -d 'Install completions'
 complete -c dek -n "not __fish_seen_subcommand_from $commands" -a completions -d 'Generate raw completions'
@@ -2082,6 +2250,11 @@ end
 # Dynamic completions for run and alias
 for cmd in run r
     complete -c dek -n "__fish_seen_subcommand_from $cmd" -a "(dek _complete run 2>/dev/null)" -f
+end
+
+# Dynamic completions for state and alias
+for cmd in state s
+    complete -c dek -n "__fish_seen_subcommand_from $cmd" -a "(dek _complete state 2>/dev/null)" -f
 end
 
 # Test flags and dynamic completions

@@ -20,12 +20,13 @@ dek apply              # apply ./dek.toml or ./dek/
 dek check              # dry-run, show what would change
 dek plan               # list items (no state check)
 dek run <name>         # run a command from config
+dek state              # query system state probes
 dek test               # test in container
 dek exec <cmd>         # run command in test container
 dek bake               # bake into standalone binary
 ```
 
-All commands have short aliases: `a`pply, `c`heck, `p`lan, `r`un, `t`est, `dx` (exec).
+All commands have short aliases: `a`pply, `c`heck, `p`lan, `r`un, `s`tate, `t`est, `dx` (exec).
 
 Config is loaded from: `./dek.toml`, `./dek/`, or `$XDG_CONFIG_HOME/dek/` (fallback).
 
@@ -554,6 +555,53 @@ check = "dek _complete check"
 ```
 
 Completions support all aliases (`a`, `c`, `p`, `r`, `t`, `dx`) and dynamically complete config keys, `@labels`, and run command names from whatever config is in the current directory.
+
+## State
+
+Query system state via shell commands with optional rewrite rules. Probes run in parallel.
+
+```toml
+[[state]]
+name = "machine"
+cmd = "uname -n"
+
+[[state]]
+name = "screen"
+cmd = "hyprctl -j monitors | jq -r '.[].description'"
+rewrite = [
+  {match = "Samsung.*0x01000E00", value = "tv"},
+  {match = "C49RG9x", value = "ultrawide"},
+]
+
+[[state]]
+name = "hour"
+cmd = "date +%H"
+rewrite = [
+  {match = "^(2[0-3]|0[0-7])$", value = "night"},
+  {match = ".*", value = "day"},
+]
+```
+
+Rewrite rules are checked in order against raw stdout. First regex match wins, output replaced with `value`. No match = raw output.
+
+```bash
+dek state                          # all probes, aligned key/value
+dek state --json                   # all probes as JSON object
+dek state machine                  # single probe value
+dek state machine screen hour      # multiple probes
+dek state machine --json           # {"machine":"marko"}
+dek state networktype is ethernet  # exit 0 if match, 1 otherwise
+dek state networktype isnot wifi   # exit 0 if NOT match, 1 otherwise
+dek state screen get tv ultra def  # "tv"/"ultra" pass through, else "def"
+```
+
+Alias: `s`. Useful in scripts:
+
+```bash
+dek s machine is marko && hyprctl dispatch ...
+dek s hour is night && notify-send "go to sleep"
+theme=$(dek s screen get tv ultrawide default)
+```
 
 ## Bake
 

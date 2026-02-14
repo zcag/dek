@@ -385,6 +385,9 @@ fn merge_config(base: &mut Config, other: Config) {
 
     // Merge artifacts
     base.artifact.extend(other.artifact);
+
+    // Merge state probes
+    base.state.extend(other.state);
 }
 
 fn merge_package_list(base: &mut Option<PackageList>, other: Option<PackageList>) {
