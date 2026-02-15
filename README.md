@@ -596,6 +596,17 @@ Rewrite rules are checked in order against raw stdout. First regex match wins, o
 
 Named Jinja templates rendered after cmd+rewrite. Context includes `raw`, `original`, and all dependency values (`dep.raw`, `dep.original`, `dep.<template>`).
 
+The `fromjson` filter parses JSON strings into objects for field access:
+
+```toml
+[[state]]
+name = "weather"
+cmd = "curl -s 'https://api.example.com/weather'"
+ttl = "30m"
+templates.short = "{{ (raw | fromjson).text }}"
+templates.long = "{{ (raw | fromjson).tooltip }}"
+```
+
 ### TTL
 
 Cache slow probe commands so they don't re-run every time. Cached output is stored in `~/.cache/dek/url/` and reused until the TTL expires. The raw command output is cached (before rewrites/templates), so rewrites and templates always re-evaluate.
@@ -608,6 +619,24 @@ ttl = "1h"   # re-run cmd only after 1 hour
 ```
 
 No `ttl` = no caching (runs every time). Supported units: `s`, `m`, `h`, `d` (combinable: `1h30m`).
+
+### Expressions
+
+`expr` is a Jinja template rendered with dependency values to produce the raw value — an alternative to `cmd` for computed states. Rewrites apply to the result, so you can combine deps into a matchable string:
+
+```toml
+[[state]]
+name = "network"
+deps = ["machine", "ssid", "networktype"]
+expr = "{{ machine.raw }}:{{ networktype.raw }}:{{ ssid.raw }}"
+rewrite = [
+  {match = "marko:ethernet", value = "home"},
+  {match = "bender:ethernet", value = "ng"},
+  {match = ".*:wifi:home", value = "home"},
+  {match = ".*:wifi:office", value = "ng"},
+  {match = ".*", value = "other"},
+]
+```
 
 ### Dependencies
 

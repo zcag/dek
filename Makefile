@@ -9,7 +9,7 @@ build:
 
 install:
 	cargo install --path .
-	confet
+	confet &
 
 watch:
 	cargo watch -x 'run --'
@@ -30,4 +30,4 @@ release:
 	git push && git push --tags; \
 	cargo publish; \
 	echo "Released v$$NEW_VERSION"
-	confet
+	confet &

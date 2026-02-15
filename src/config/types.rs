@@ -333,6 +333,8 @@ pub struct ArtifactConfig {
 pub struct StateConfig {
     pub name: String,
     pub cmd: Option<String>,
+    /// Jinja expression evaluated with dep context to produce raw value (alternative to cmd)
+    pub expr: Option<String>,
     #[serde(default)]
     pub rewrite: Vec<RewriteRule>,
     #[serde(default)]

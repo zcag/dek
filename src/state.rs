@@ -94,6 +94,19 @@ fn topo_sort(states: &[StateConfig]) -> Result<Vec<Vec<usize>>> {
     Ok(layers)
 }
 
+fn add_filters(env: &mut minijinja::Environment) {
+    env.add_filter(
+        "fromjson",
+        |s: String| -> Result<minijinja::Value, minijinja::Error> {
+            serde_json::from_str::<serde_json::Value>(&s)
+                .map(|v| minijinja::Value::from_serialize(&v))
+                .map_err(|e| {
+                    minijinja::Error::new(minijinja::ErrorKind::InvalidOperation, e.to_string())
+                })
+        },
+    );
+}
+
 fn eval_single(state: &StateConfig, dep_results: &HashMap<String, &StateResult>) -> StateResult {
     // Run cmd if present, with optional TTL cache
     let ttl = state
@@ -128,7 +141,30 @@ fn eval_single(state: &StateConfig, dep_results: &HashMap<String, &StateResult>)
         result
     });
 
-    let raw_before_rewrite = cmd_output.unwrap_or_default();
+    // If no cmd, try expr (jinja rendered with dep context)
+    let raw_before_rewrite = cmd_output.unwrap_or_else(|| {
+        state.expr.as_ref().map(|expr| {
+            let mut env = minijinja::Environment::new();
+            env.set_undefined_behavior(minijinja::UndefinedBehavior::Lenient);
+            add_filters(&mut env);
+            let mut ctx = HashMap::new();
+            for (dep_name, dep_result) in dep_results {
+                let mut dep_map = HashMap::new();
+                dep_map.insert("raw".to_string(), dep_result.raw.clone());
+                if let Some(ref orig) = dep_result.original {
+                    dep_map.insert("original".to_string(), orig.clone());
+                }
+                for (tmpl_name, tmpl_val) in &dep_result.templates {
+                    dep_map.insert(tmpl_name.clone(), tmpl_val.clone());
+                }
+                ctx.insert(dep_name.clone(), minijinja::Value::from_serialize(&dep_map));
+            }
+            env.add_template("_expr", expr).ok();
+            env.get_template("_expr")
+                .and_then(|t| t.render(&ctx))
+                .unwrap_or_default()
+        }).unwrap_or_default()
+    });
 
     // Apply rewrites
     let mut original = None;
@@ -148,6 +184,7 @@ fn eval_single(state: &StateConfig, dep_results: &HashMap<String, &StateResult>)
     if !state.templates.is_empty() {
         let mut env = minijinja::Environment::new();
         env.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
+        add_filters(&mut env);
 
         let mut ctx = HashMap::new();
         ctx.insert("raw".to_string(), minijinja::Value::from(raw.clone()));
