@@ -166,6 +166,23 @@ pub struct FileConfig {
     /// Structured line entries with original pattern matching
     #[serde(default)]
     pub line: Vec<FileLineConfig>,
+    /// Template files rendered with state values + built-ins
+    #[serde(default)]
+    pub template: Vec<FileTemplateConfig>,
+    /// Shared vars files for all templates (YAML or TOML)
+    #[serde(default)]
+    pub vars: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct FileTemplateConfig {
+    pub src: String,
+    pub dest: String,
+    #[serde(default)]
+    pub states: Vec<String>,
+    /// Per-template vars files (merged on top of shared file.vars)
+    #[serde(default)]
+    pub vars: Vec<String>,
 }
 
 /// Fetch target: either a plain path string or { path, ttl }
@@ -322,6 +339,7 @@ pub struct StateConfig {
     pub deps: Vec<String>,
     #[serde(default)]
     pub templates: HashMap<String, String>,
+    pub ttl: Option<String>,
 }
 
 /// Rewrite rule for state probes

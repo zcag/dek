@@ -568,6 +568,7 @@ cmd = "uname -n"
 [[state]]
 name = "screen"
 cmd = "hyprctl -j monitors | jq -r '.[].description'"
+ttl = "1h"   # cache probe output for 1 hour
 rewrite = [
   {match = "Samsung.*0x01000E00", value = "tv"},
   {match = "C49RG9x", value = "ultrawide"},
@@ -595,6 +596,19 @@ Rewrite rules are checked in order against raw stdout. First regex match wins, o
 
 Named Jinja templates rendered after cmd+rewrite. Context includes `raw`, `original`, and all dependency values (`dep.raw`, `dep.original`, `dep.<template>`).
 
+### TTL
+
+Cache slow probe commands so they don't re-run every time. Cached output is stored in `~/.cache/dek/url/` and reused until the TTL expires. The raw command output is cached (before rewrites/templates), so rewrites and templates always re-evaluate.
+
+```toml
+[[state]]
+name = "screen"
+cmd = "hyprctl -j monitors | jq -r '.[].description'"
+ttl = "1h"   # re-run cmd only after 1 hour
+```
+
+No `ttl` = no caching (runs every time). Supported units: `s`, `m`, `h`, `d` (combinable: `1h30m`).
+
 ### Dependencies
 
 States can depend on other states via `deps`. Dependencies are evaluated first (topologically sorted), and their results are available in templates. States without `cmd` are computed purely from deps+templates.
@@ -619,6 +633,82 @@ dek s hour is night && notify-send "go to sleep"
 theme=$(dek s screen get tv ultrawide default)
 icon=$(dek s screen.icon)
 ```
+
+## File Templates
+
+Render Jinja template files with state values, built-in variables, and vars files. Templates are checked/applied like any other file provider.
+
+```toml
+[[state]]
+name = "screen"
+cmd = "hyprctl -j monitors | jq -r '.[].description'"
+ttl = "1h"
+rewrite = [{match = "Samsung.*", value = "tv"}]
+templates = { icon = "{% if raw == 'tv' %}T{% else %}U{% endif %}" }
+
+[[state]]
+name = "hour"
+cmd = "date +%H"
+
+[[file.template]]
+src = "templates/waybar.json.j2"
+dest = "~/.config/waybar/config.json"
+states = ["screen", "hour"]
+```
+
+`templates/waybar.json.j2`:
+```
+// Generated on {{ hostname }} by {{ user }}
+{
+  "output": "{{ screen.raw }}",
+  "icon": "{{ screen.icon }}",
+  "mode": "{{ hour.raw }}"
+}
+```
+
+### Template Context
+
+**Built-ins** (always available): `hostname`, `user`, `os`, `arch`
+
+**States** (from `states` field): each state is an object with `.raw`, `.original`, and any template variant keys (e.g. `screen.icon`).
+
+Only states listed in `states` (and their transitive dependencies) are evaluated.
+
+Missing variables render as empty strings (lenient mode).
+
+### Vars Files
+
+Load external variable files (YAML or TOML) into the template context — like Ansible's vars files. Supports nested maps, arrays, and complex structures.
+
+**Shared vars** — available to all templates:
+
+```toml
+[file]
+vars = ["vars/common.yaml", "vars/defaults.toml"]
+```
+
+**Per-template vars** — merged on top of shared vars (overrides):
+
+```toml
+[[file.template]]
+src = "templates/app.conf.j2"
+dest = "~/.config/app/config"
+vars = ["vars/site.yaml"]
+states = ["screen"]
+```
+
+File format is detected by extension: `.yaml`/`.yml` for YAML, `.toml` for TOML. All top-level keys become template variables.
+
+Example `vars/site.yaml`:
+```yaml
+site_vars:
+  kafka_server:
+    - 169.254.0.10:9092
+    - 169.254.0.11:9092
+  site_id: 1
+```
+
+In templates: `{{ site_vars.site_id }}`, `{% for s in site_vars.kafka_server %}{{ s }}{% endfor %}`.
 
 ## Bake
 

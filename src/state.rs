@@ -1,15 +1,15 @@
 use anyhow::{bail, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process::{Command, Stdio};
 
 use crate::config;
 use crate::config::StateConfig;
 
-struct StateResult {
-    name: String,
-    original: Option<String>,
-    raw: String,
-    templates: HashMap<String, String>,
+pub struct StateResult {
+    pub name: String,
+    pub original: Option<String>,
+    pub raw: String,
+    pub templates: HashMap<String, String>,
 }
 
 impl StateResult {
@@ -95,17 +95,37 @@ fn topo_sort(states: &[StateConfig]) -> Result<Vec<Vec<usize>>> {
 }
 
 fn eval_single(state: &StateConfig, dep_results: &HashMap<String, &StateResult>) -> StateResult {
-    // Run cmd if present
+    // Run cmd if present, with optional TTL cache
+    let ttl = state
+        .ttl
+        .as_deref()
+        .and_then(|s| crate::util::parse_duration(s).ok());
+    let cache_key = format!("state-probe:{}", state.name);
+
     let cmd_output = state.cmd.as_ref().map(|cmd| {
+        // Check cache first
+        if let Some(max_age) = ttl {
+            if let Some(cached) = crate::cache::get(&cache_key, Some(max_age)) {
+                return String::from_utf8_lossy(&cached).to_string();
+            }
+        }
+
         let output = Command::new("sh")
             .args(["-c", cmd])
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .output()
             .ok();
-        output
+        let result = output
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_default()
+            .unwrap_or_default();
+
+        // Store in cache if TTL configured
+        if ttl.is_some() {
+            crate::cache::set(&cache_key, result.as_bytes());
+        }
+
+        result
     });
 
     let raw_before_rewrite = cmd_output.unwrap_or_default();
@@ -408,6 +428,38 @@ pub fn run(
         }
     }
     Ok(())
+}
+
+/// Evaluate a subset of states (+ transitive deps), returning name→result map
+pub fn eval_states(
+    states: &[StateConfig],
+    needed: &[String],
+) -> Result<HashMap<String, StateResult>> {
+    // Compute transitive deps
+    let name_set: HashMap<&str, &StateConfig> =
+        states.iter().map(|s| (s.name.as_str(), s)).collect();
+    let mut required: HashSet<String> = HashSet::new();
+    let mut stack: Vec<String> = needed.to_vec();
+    while let Some(name) = stack.pop() {
+        if !required.insert(name.clone()) {
+            continue;
+        }
+        if let Some(s) = name_set.get(name.as_str()) {
+            for dep in &s.deps {
+                stack.push(dep.clone());
+            }
+        }
+    }
+
+    // Filter to required states, preserving config order
+    let filtered: Vec<StateConfig> = states
+        .iter()
+        .filter(|s| required.contains(&s.name))
+        .cloned()
+        .collect();
+
+    let results = eval_all(&filtered)?;
+    Ok(results.into_iter().map(|r| (r.name.clone(), r)).collect())
 }
 
 pub fn completions(states: &[StateConfig]) -> Vec<String> {

@@ -331,6 +331,7 @@ impl ProviderRegistry {
             Box::new(file::SymlinkProvider),
             Box::new(file::EnsureLineProvider),
             Box::new(file::FileLineProvider),
+            Box::new(file::TemplateProvider),
             Box::new(shell::AliasProvider),
             Box::new(shell::EnvProvider),
             Box::new(command::CommandProvider),

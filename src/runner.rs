@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::output;
 use crate::providers::{resolve_requirements, ProviderRegistry, Requirement, StateItem};
 use anyhow::{bail, Context, Result};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
@@ -265,6 +265,35 @@ fn resolve_source_path(src: &str, base_dir: &Path) -> String {
     }
 }
 
+/// Load vars files (YAML or TOML) and return merged key→Value map.
+/// Later files override earlier ones.
+fn load_vars_files(paths: &[String], base_dir: &Path) -> HashMap<String, minijinja::Value> {
+    let mut merged = HashMap::new();
+    for path in paths {
+        let resolved = resolve_source_path(path, base_dir);
+        let content = match std::fs::read_to_string(&resolved) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let val: Option<serde_json::Value> = if resolved.ends_with(".yaml")
+            || resolved.ends_with(".yml")
+        {
+            serde_yml::from_str(&content).ok()
+        } else {
+            // TOML
+            toml::from_str::<toml::Value>(&content)
+                .ok()
+                .and_then(|v| serde_json::to_value(v).ok())
+        };
+        if let Some(serde_json::Value::Object(map)) = val {
+            for (k, v) in map {
+                merged.insert(k, minijinja::Value::from_serialize(&v));
+            }
+        }
+    }
+    merged
+}
+
 fn collect_state_items(config: &Config, base_dir: &Path) -> Vec<StateItem> {
     let mut items = Vec::new();
 
@@ -378,6 +407,100 @@ fn collect_state_items(config: &Config, base_dir: &Path) -> Vec<StateItem> {
                     .with_run_if(entry.run_if.clone())
                     .with_cache_key(entry.cache_key.clone(), entry.cache_key_cmd.clone()),
             );
+        }
+
+        // Templates
+        if !file.template.is_empty() {
+            // Collect all needed state names
+            let needed: Vec<String> = file
+                .template
+                .iter()
+                .flat_map(|t| t.states.iter().cloned())
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect();
+
+            // Evaluate states
+            let state_results = if needed.is_empty() {
+                HashMap::new()
+            } else {
+                crate::state::eval_states(&config.state, &needed).unwrap_or_default()
+            };
+
+            // Load shared vars files
+            let shared_vars = load_vars_files(&file.vars, base_dir);
+
+            // Build built-in context values
+            let hostname = hostname::get()
+                .map(|h| h.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let user = std::env::var("USER").unwrap_or_default();
+            let os = std::env::consts::OS.to_string();
+            let arch = std::env::consts::ARCH.to_string();
+
+            for tmpl in &file.template {
+                let src_path = resolve_source_path(&tmpl.src, base_dir);
+                let src_content = match std::fs::read_to_string(&src_path) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+
+                // Build context: built-ins first
+                let mut ctx = HashMap::new();
+                ctx.insert(
+                    "hostname".to_string(),
+                    minijinja::Value::from(hostname.clone()),
+                );
+                ctx.insert("user".to_string(), minijinja::Value::from(user.clone()));
+                ctx.insert("os".to_string(), minijinja::Value::from(os.clone()));
+                ctx.insert("arch".to_string(), minijinja::Value::from(arch.clone()));
+
+                // Layer shared vars
+                for (k, v) in &shared_vars {
+                    ctx.insert(k.clone(), v.clone());
+                }
+
+                // Layer per-template vars (overrides shared)
+                if !tmpl.vars.is_empty() {
+                    let tmpl_vars = load_vars_files(&tmpl.vars, base_dir);
+                    for (k, v) in tmpl_vars {
+                        ctx.insert(k, v);
+                    }
+                }
+
+                // Add state results
+                for (name, result) in &state_results {
+                    if !tmpl.states.contains(name) {
+                        continue;
+                    }
+                    let mut map = HashMap::new();
+                    map.insert("raw".to_string(), result.raw.clone());
+                    if let Some(ref orig) = result.original {
+                        map.insert("original".to_string(), orig.clone());
+                    }
+                    for (k, v) in &result.templates {
+                        map.insert(k.clone(), v.clone());
+                    }
+                    ctx.insert(
+                        name.clone(),
+                        minijinja::Value::from_serialize(&map),
+                    );
+                }
+
+                // Render
+                let mut env = minijinja::Environment::new();
+                env.set_undefined_behavior(minijinja::UndefinedBehavior::Lenient);
+                env.add_template("_tmpl", &src_content).ok();
+                let rendered = env
+                    .get_template("_tmpl")
+                    .and_then(|t| t.render(&ctx))
+                    .unwrap_or_default();
+
+                let dest = ev(&tmpl.dest);
+                items.push(
+                    StateItem::new("file.template", &dest).with_value(rendered),
+                );
+            }
         }
     }
 

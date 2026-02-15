@@ -298,6 +298,55 @@ impl Provider for EnsureLineProvider {
 }
 
 // =============================================================================
+// TEMPLATE - render Jinja template files with state values
+// =============================================================================
+
+pub struct TemplateProvider;
+
+impl Provider for TemplateProvider {
+    fn name(&self) -> &'static str {
+        "file.template"
+    }
+
+    fn check(&self, state: &StateItem) -> Result<CheckResult> {
+        let dst = expand_path(&state.key);
+        let rendered = state.value.as_deref().unwrap_or("");
+
+        if !dst.exists() {
+            return Ok(CheckResult::Missing {
+                detail: format!("destination '{}' does not exist", dst.display()),
+            });
+        }
+
+        let current = fs::read_to_string(&dst)
+            .with_context(|| format!("failed to read: {}", dst.display()))?;
+
+        if current == rendered {
+            Ok(CheckResult::Satisfied)
+        } else {
+            Ok(CheckResult::Missing {
+                detail: format!("contents differ for '{}'", dst.display()),
+            })
+        }
+    }
+
+    fn apply(&self, state: &StateItem) -> Result<()> {
+        let dst = expand_path(&state.key);
+        let rendered = state.value.as_deref().unwrap_or("");
+
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create parent dirs for: {}", dst.display()))?;
+        }
+
+        fs::write(&dst, rendered)
+            .with_context(|| format!("failed to write: {}", dst.display()))?;
+
+        Ok(())
+    }
+}
+
+// =============================================================================
 // FILE.LINE - structured ensure_line with original pattern matching
 // =============================================================================
 

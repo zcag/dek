@@ -342,6 +342,8 @@ fn merge_config(base: &mut Config, other: Config) {
             base_file.ensure_line.get_or_insert_with(Default::default).extend(ensure_line);
         }
         base_file.line.extend(file.line);
+        base_file.template.extend(file.template);
+        base_file.vars.extend(file.vars);
     }
 
     // Merge aliases
