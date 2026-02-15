@@ -342,6 +342,9 @@ pub struct StateConfig {
     #[serde(default)]
     pub templates: HashMap<String, String>,
     pub ttl: Option<String>,
+    /// Treat raw output as JSON — parsed in templates, embedded in --json output
+    #[serde(default)]
+    pub json: bool,
 }
 
 /// Rewrite rule for state probes

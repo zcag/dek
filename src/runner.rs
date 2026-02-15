@@ -473,13 +473,13 @@ fn collect_state_items(config: &Config, base_dir: &Path) -> Vec<StateItem> {
                     if !tmpl.states.contains(name) {
                         continue;
                     }
-                    let mut map = HashMap::new();
-                    map.insert("raw".to_string(), result.raw.clone());
+                    let mut map: HashMap<String, serde_json::Value> = HashMap::new();
+                    map.insert("raw".to_string(), result.raw_json());
                     if let Some(ref orig) = result.original {
-                        map.insert("original".to_string(), orig.clone());
+                        map.insert("original".to_string(), serde_json::Value::String(orig.clone()));
                     }
                     for (k, v) in &result.templates {
-                        map.insert(k.clone(), v.clone());
+                        map.insert(k.clone(), serde_json::Value::String(v.clone()));
                     }
                     ctx.insert(
                         name.clone(),

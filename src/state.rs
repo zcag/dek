@@ -9,6 +9,8 @@ pub struct StateResult {
     pub name: String,
     pub original: Option<String>,
     pub raw: String,
+    /// Parsed JSON when `json: true` on the state config
+    pub raw_parsed: Option<serde_json::Value>,
     pub templates: HashMap<String, String>,
 }
 
@@ -18,6 +20,24 @@ impl StateResult {
             None | Some("raw") => Some(&self.raw),
             Some("original") => self.original.as_deref().or(Some(&self.raw)),
             Some(v) => self.templates.get(v).map(|s| s.as_str()),
+        }
+    }
+
+    /// Return raw as minijinja Value — parsed object if json, string otherwise
+    pub fn raw_value(&self) -> minijinja::Value {
+        if let Some(ref v) = self.raw_parsed {
+            minijinja::Value::from_serialize(v)
+        } else {
+            minijinja::Value::from(self.raw.clone())
+        }
+    }
+
+    /// Return raw as serde_json Value — object if json, string otherwise
+    pub fn raw_json(&self) -> serde_json::Value {
+        if let Some(ref v) = self.raw_parsed {
+            v.clone()
+        } else {
+            serde_json::Value::String(self.raw.clone())
         }
     }
 }
@@ -141,21 +161,32 @@ fn eval_single(state: &StateConfig, dep_results: &HashMap<String, &StateResult>)
         result
     });
 
-    // If no cmd, try expr (jinja rendered with dep context)
-    let raw_before_rewrite = cmd_output.unwrap_or_else(|| {
-        state.expr.as_ref().map(|expr| {
+    // Evaluate expr — post-processes cmd output, or standalone with dep context
+    let raw_before_rewrite = match &state.expr {
+        Some(expr) => {
+            let cmd_raw = cmd_output.unwrap_or_default();
             let mut env = minijinja::Environment::new();
             env.set_undefined_behavior(minijinja::UndefinedBehavior::Lenient);
             add_filters(&mut env);
             let mut ctx = HashMap::new();
+            // cmd output available as `raw` in expr context
+            if state.json {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&cmd_raw) {
+                    ctx.insert("raw".to_string(), minijinja::Value::from_serialize(&v));
+                } else {
+                    ctx.insert("raw".to_string(), minijinja::Value::from(cmd_raw));
+                }
+            } else {
+                ctx.insert("raw".to_string(), minijinja::Value::from(cmd_raw));
+            }
             for (dep_name, dep_result) in dep_results {
-                let mut dep_map = HashMap::new();
-                dep_map.insert("raw".to_string(), dep_result.raw.clone());
+                let mut dep_map: HashMap<String, serde_json::Value> = HashMap::new();
+                dep_map.insert("raw".to_string(), dep_result.raw_json());
                 if let Some(ref orig) = dep_result.original {
-                    dep_map.insert("original".to_string(), orig.clone());
+                    dep_map.insert("original".to_string(), serde_json::Value::String(orig.clone()));
                 }
                 for (tmpl_name, tmpl_val) in &dep_result.templates {
-                    dep_map.insert(tmpl_name.clone(), tmpl_val.clone());
+                    dep_map.insert(tmpl_name.clone(), serde_json::Value::String(tmpl_val.clone()));
                 }
                 ctx.insert(dep_name.clone(), minijinja::Value::from_serialize(&dep_map));
             }
@@ -163,8 +194,9 @@ fn eval_single(state: &StateConfig, dep_results: &HashMap<String, &StateResult>)
             env.get_template("_expr")
                 .and_then(|t| t.render(&ctx))
                 .unwrap_or_default()
-        }).unwrap_or_default()
-    });
+        }
+        None => cmd_output.unwrap_or_default(),
+    };
 
     // Apply rewrites
     let mut original = None;
@@ -179,6 +211,13 @@ fn eval_single(state: &StateConfig, dep_results: &HashMap<String, &StateResult>)
         }
     }
 
+    // Parse JSON if flagged
+    let raw_parsed = if state.json {
+        serde_json::from_str::<serde_json::Value>(&raw).ok()
+    } else {
+        None
+    };
+
     // Render templates
     let mut rendered = HashMap::new();
     if !state.templates.is_empty() {
@@ -187,7 +226,12 @@ fn eval_single(state: &StateConfig, dep_results: &HashMap<String, &StateResult>)
         add_filters(&mut env);
 
         let mut ctx = HashMap::new();
-        ctx.insert("raw".to_string(), minijinja::Value::from(raw.clone()));
+        // Use parsed JSON for raw if available
+        if let Some(ref v) = raw_parsed {
+            ctx.insert("raw".to_string(), minijinja::Value::from_serialize(v));
+        } else {
+            ctx.insert("raw".to_string(), minijinja::Value::from(raw.clone()));
+        }
         if let Some(ref orig) = original {
             ctx.insert(
                 "original".to_string(),
@@ -197,13 +241,13 @@ fn eval_single(state: &StateConfig, dep_results: &HashMap<String, &StateResult>)
 
         // Add dep values to context
         for (dep_name, dep_result) in dep_results {
-            let mut dep_map = HashMap::new();
-            dep_map.insert("raw".to_string(), dep_result.raw.clone());
+            let mut dep_map: HashMap<String, serde_json::Value> = HashMap::new();
+            dep_map.insert("raw".to_string(), dep_result.raw_json());
             if let Some(ref orig) = dep_result.original {
-                dep_map.insert("original".to_string(), orig.clone());
+                dep_map.insert("original".to_string(), serde_json::Value::String(orig.clone()));
             }
             for (tmpl_name, tmpl_val) in &dep_result.templates {
-                dep_map.insert(tmpl_name.clone(), tmpl_val.clone());
+                dep_map.insert(tmpl_name.clone(), serde_json::Value::String(tmpl_val.clone()));
             }
             ctx.insert(dep_name.clone(), minijinja::Value::from_serialize(&dep_map));
         }
@@ -222,6 +266,7 @@ fn eval_single(state: &StateConfig, dep_results: &HashMap<String, &StateResult>)
         name: state.name.clone(),
         original,
         raw,
+        raw_parsed,
         templates: rendered,
     }
 }
@@ -415,7 +460,7 @@ pub fn run(
             // Full JSON with nested objects
             for r in &results {
                 let mut obj = serde_json::Map::new();
-                obj.insert("raw".to_string(), serde_json::Value::String(r.raw.clone()));
+                obj.insert("raw".to_string(), r.raw_json());
                 if let Some(ref orig) = r.original {
                     obj.insert(
                         "original".to_string(),
