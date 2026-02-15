@@ -1,0 +1,425 @@
+use anyhow::{bail, Result};
+use std::collections::HashMap;
+use std::process::{Command, Stdio};
+
+use crate::config;
+use crate::config::StateConfig;
+
+struct StateResult {
+    name: String,
+    original: Option<String>,
+    raw: String,
+    templates: HashMap<String, String>,
+}
+
+impl StateResult {
+    fn get_variant(&self, variant: Option<&str>) -> Option<&str> {
+        match variant {
+            None | Some("raw") => Some(&self.raw),
+            Some("original") => self.original.as_deref().or(Some(&self.raw)),
+            Some(v) => self.templates.get(v).map(|s| s.as_str()),
+        }
+    }
+}
+
+struct StateQuery {
+    name: String,
+    variant: Option<String>,
+}
+
+fn parse_query(s: &str) -> StateQuery {
+    match s.split_once('.') {
+        Some((name, variant)) => StateQuery {
+            name: name.to_string(),
+            variant: Some(variant.to_string()),
+        },
+        None => StateQuery {
+            name: s.to_string(),
+            variant: None,
+        },
+    }
+}
+
+// Kahn's algorithm — returns layers of indices for parallel eval
+fn topo_sort(states: &[StateConfig]) -> Result<Vec<Vec<usize>>> {
+    let name_to_idx: HashMap<&str, usize> = states
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.name.as_str(), i))
+        .collect();
+
+    // Validate deps exist
+    for s in states {
+        for dep in &s.deps {
+            if !name_to_idx.contains_key(dep.as_str()) {
+                bail!("State '{}' depends on unknown state '{}'", s.name, dep);
+            }
+        }
+    }
+
+    let n = states.len();
+    let mut in_degree = vec![0usize; n];
+    let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); n];
+
+    for (i, s) in states.iter().enumerate() {
+        in_degree[i] = s.deps.len();
+        for dep in &s.deps {
+            let dep_idx = name_to_idx[dep.as_str()];
+            dependents[dep_idx].push(i);
+        }
+    }
+
+    let mut layers = Vec::new();
+    let mut ready: Vec<usize> = (0..n).filter(|&i| in_degree[i] == 0).collect();
+    let mut processed = 0;
+
+    while !ready.is_empty() {
+        layers.push(ready.clone());
+        processed += ready.len();
+        let mut next_ready = Vec::new();
+        for &idx in &ready {
+            for &dep_idx in &dependents[idx] {
+                in_degree[dep_idx] -= 1;
+                if in_degree[dep_idx] == 0 {
+                    next_ready.push(dep_idx);
+                }
+            }
+        }
+        ready = next_ready;
+    }
+
+    if processed != n {
+        bail!("Cycle detected in state dependencies");
+    }
+    Ok(layers)
+}
+
+fn eval_single(state: &StateConfig, dep_results: &HashMap<String, &StateResult>) -> StateResult {
+    // Run cmd if present
+    let cmd_output = state.cmd.as_ref().map(|cmd| {
+        let output = Command::new("sh")
+            .args(["-c", cmd])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+            .ok();
+        output
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default()
+    });
+
+    let raw_before_rewrite = cmd_output.unwrap_or_default();
+
+    // Apply rewrites
+    let mut original = None;
+    let mut raw = raw_before_rewrite.clone();
+    for rule in &state.rewrite {
+        if let Ok(re) = regex::Regex::new(&rule.pattern) {
+            if re.is_match(&raw) {
+                original = Some(raw_before_rewrite.clone());
+                raw = rule.value.clone();
+                break;
+            }
+        }
+    }
+
+    // Render templates
+    let mut rendered = HashMap::new();
+    if !state.templates.is_empty() {
+        let mut env = minijinja::Environment::new();
+        env.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
+
+        let mut ctx = HashMap::new();
+        ctx.insert("raw".to_string(), minijinja::Value::from(raw.clone()));
+        if let Some(ref orig) = original {
+            ctx.insert(
+                "original".to_string(),
+                minijinja::Value::from(orig.clone()),
+            );
+        }
+
+        // Add dep values to context
+        for (dep_name, dep_result) in dep_results {
+            let mut dep_map = HashMap::new();
+            dep_map.insert("raw".to_string(), dep_result.raw.clone());
+            if let Some(ref orig) = dep_result.original {
+                dep_map.insert("original".to_string(), orig.clone());
+            }
+            for (tmpl_name, tmpl_val) in &dep_result.templates {
+                dep_map.insert(tmpl_name.clone(), tmpl_val.clone());
+            }
+            ctx.insert(dep_name.clone(), minijinja::Value::from_serialize(&dep_map));
+        }
+
+        for (tmpl_name, tmpl_src) in &state.templates {
+            env.add_template(tmpl_name, tmpl_src).ok();
+            if let Ok(tmpl) = env.get_template(tmpl_name) {
+                if let Ok(val) = tmpl.render(&ctx) {
+                    rendered.insert(tmpl_name.clone(), val);
+                }
+            }
+        }
+    }
+
+    StateResult {
+        name: state.name.clone(),
+        original,
+        raw,
+        templates: rendered,
+    }
+}
+
+fn eval_all(states: &[StateConfig]) -> Result<Vec<StateResult>> {
+    let layers = topo_sort(states)?;
+    let mut results: HashMap<String, StateResult> = HashMap::new();
+
+    for layer in &layers {
+        if layer.len() == 1 {
+            // Single state — no need for threading
+            let idx = layer[0];
+            let state = &states[idx];
+            let dep_results: HashMap<String, &StateResult> = state
+                .deps
+                .iter()
+                .filter_map(|d| results.get(d).map(|r| (d.clone(), r)))
+                .collect();
+            let result = eval_single(state, &dep_results);
+            results.insert(result.name.clone(), result);
+        } else {
+            // Parallel eval within layer
+            let layer_results: Vec<StateResult> = std::thread::scope(|s| {
+                let handles: Vec<_> = layer
+                    .iter()
+                    .map(|&idx| {
+                        let state = &states[idx];
+                        let dep_results: HashMap<String, &StateResult> = state
+                            .deps
+                            .iter()
+                            .filter_map(|d| results.get(d).map(|r| (d.clone(), r)))
+                            .collect();
+                        s.spawn(move || eval_single(state, &dep_results))
+                    })
+                    .collect();
+                handles.into_iter().map(|h| h.join().unwrap()).collect()
+            });
+            for result in layer_results {
+                results.insert(result.name.clone(), result);
+            }
+        }
+    }
+
+    // Return in original config order
+    Ok(states
+        .iter()
+        .filter_map(|s| results.remove(&s.name))
+        .collect())
+}
+
+pub fn run(
+    config_path: Option<std::path::PathBuf>,
+    name: Option<String>,
+    json: bool,
+    args: Vec<String>,
+) -> Result<()> {
+    let path = crate::resolve_config(config_path)?;
+    let resolved_path = config::resolve_path(&path)?;
+    let cfg = config::load_all(&resolved_path)?;
+
+    if cfg.state.is_empty() {
+        bail!("No state probes defined in config");
+    }
+
+    // --json may end up in args due to trailing_var_arg
+    let json = json || args.iter().any(|a| a == "--json");
+    let args: Vec<String> = args.into_iter().filter(|a| a != "--json").collect();
+
+    // Parse the first name for dot notation
+    let query = name.as_ref().map(|n| parse_query(n));
+
+    // Collect additional names from args (non-operator mode)
+    let has_op = query.is_some()
+        && !args.is_empty()
+        && matches!(args[0].as_str(), "is" | "isnot" | "get");
+
+    let mut queries: Vec<StateQuery> = Vec::new();
+    if let Some(q) = query {
+        queries.push(q);
+    }
+    if !has_op {
+        for a in &args {
+            queries.push(parse_query(a));
+        }
+    }
+
+    // Determine which states need evaluation
+    let needed_names: Vec<&str> = if queries.is_empty() {
+        cfg.state.iter().map(|s| s.name.as_str()).collect()
+    } else {
+        // Need to eval all states since deps may require it
+        cfg.state.iter().map(|s| s.name.as_str()).collect()
+    };
+    let _ = needed_names; // We always eval all for simplicity with deps
+
+    let results = eval_all(&cfg.state)?;
+    let result_map: HashMap<&str, &StateResult> =
+        results.iter().map(|r| (r.name.as_str(), r)).collect();
+
+    // Operator mode
+    if has_op {
+        let q = &queries[0];
+        let result = result_map
+            .get(q.name.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Unknown state probe: {}", q.name))?;
+        let value = result
+            .get_variant(q.variant.as_deref())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Unknown variant '{}' for state '{}'",
+                    q.variant.as_deref().unwrap_or(""),
+                    q.name
+                )
+            })?;
+
+        let op = &args[0];
+        match op.as_str() {
+            "is" => {
+                let expected = args
+                    .get(1)
+                    .ok_or_else(|| anyhow::anyhow!("Missing value after 'is'"))?;
+                if value != *expected {
+                    std::process::exit(1);
+                }
+            }
+            "isnot" => {
+                let expected = args
+                    .get(1)
+                    .ok_or_else(|| anyhow::anyhow!("Missing value after 'isnot'"))?;
+                if value == *expected {
+                    std::process::exit(1);
+                }
+            }
+            "get" => {
+                if args.len() < 3 {
+                    bail!("Usage: dek state <name> get <val>... <default>");
+                }
+                let allowed = &args[1..args.len() - 1];
+                let fallback = &args[args.len() - 1];
+                if allowed.iter().any(|a| a == value) {
+                    print!("{}", value);
+                } else {
+                    print!("{}", fallback);
+                }
+            }
+            _ => {}
+        }
+        return Ok(());
+    }
+
+    // Filter to requested queries
+    let display_results: Vec<(&str, &str, Option<&str>)> = if queries.is_empty() {
+        // All probes, raw values
+        results
+            .iter()
+            .map(|r| (r.name.as_str(), r.raw.as_str(), None))
+            .collect()
+    } else {
+        let mut out = Vec::new();
+        for q in &queries {
+            let result = result_map
+                .get(q.name.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Unknown state probe: {}", q.name))?;
+            let value = result.get_variant(q.variant.as_deref()).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Unknown variant '{}' for state '{}'",
+                    q.variant.as_deref().unwrap_or(""),
+                    q.name
+                )
+            })?;
+            let label = if q.variant.is_some() {
+                // Reconstruct "name.variant"
+                q.variant.as_deref()
+            } else {
+                None
+            };
+            out.push((q.name.as_str(), value, label));
+        }
+        out
+    };
+
+    // Single query, no json → plain value
+    if display_results.len() == 1 && !json && !queries.is_empty() {
+        println!("{}", display_results[0].1);
+        return Ok(());
+    }
+
+    if json {
+        let mut map = serde_json::Map::new();
+        if queries.is_empty() {
+            // Full JSON with nested objects
+            for r in &results {
+                let mut obj = serde_json::Map::new();
+                obj.insert("raw".to_string(), serde_json::Value::String(r.raw.clone()));
+                if let Some(ref orig) = r.original {
+                    obj.insert(
+                        "original".to_string(),
+                        serde_json::Value::String(orig.clone()),
+                    );
+                }
+                for (k, v) in &r.templates {
+                    obj.insert(k.clone(), serde_json::Value::String(v.clone()));
+                }
+                map.insert(r.name.clone(), serde_json::Value::Object(obj));
+            }
+        } else {
+            // Queried subset
+            for (name, value, variant) in &display_results {
+                let key = match variant {
+                    Some(v) => format!("{}.{}", name, v),
+                    None => name.to_string(),
+                };
+                map.insert(key, serde_json::Value::String(value.to_string()));
+            }
+        }
+        println!("{}", serde_json::Value::Object(map));
+    } else {
+        let max_name = display_results
+            .iter()
+            .map(|(n, _, v)| {
+                if let Some(var) = v {
+                    n.len() + 1 + var.len()
+                } else {
+                    n.len()
+                }
+            })
+            .max()
+            .unwrap_or(0);
+        for (name, value, variant) in &display_results {
+            let label = match variant {
+                Some(v) => format!("{}.{}", name, v),
+                None => name.to_string(),
+            };
+            use owo_colors::OwoColorize;
+            println!(
+                "  {:>width$}  {}",
+                c!(label, cyan),
+                c!(value, bold),
+                width = max_name
+            );
+        }
+    }
+    Ok(())
+}
+
+pub fn completions(states: &[StateConfig]) -> Vec<String> {
+    let mut items = Vec::new();
+    for s in states {
+        items.push(s.name.clone());
+        items.push(format!("{}.raw", s.name));
+        items.push(format!("{}.original", s.name));
+        for tmpl_name in s.templates.keys() {
+            items.push(format!("{}.{}", s.name, tmpl_name));
+        }
+    }
+    items.sort();
+    items
+}

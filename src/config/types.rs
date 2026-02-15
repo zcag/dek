@@ -315,9 +315,13 @@ pub struct ArtifactConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct StateConfig {
     pub name: String,
-    pub cmd: String,
+    pub cmd: Option<String>,
     #[serde(default)]
     pub rewrite: Vec<RewriteRule>,
+    #[serde(default)]
+    pub deps: Vec<String>,
+    #[serde(default)]
+    pub templates: HashMap<String, String>,
 }
 
 /// Rewrite rule for state probes

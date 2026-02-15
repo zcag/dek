@@ -558,7 +558,7 @@ Completions support all aliases (`a`, `c`, `p`, `r`, `t`, `dx`) and dynamically 
 
 ## State
 
-Query system state via shell commands with optional rewrite rules. Probes run in parallel.
+Query system state via shell commands with optional rewrite rules, named templates, and dependencies. Probes run in parallel (respecting dependency order).
 
 ```toml
 [[state]]
@@ -572,6 +572,7 @@ rewrite = [
   {match = "Samsung.*0x01000E00", value = "tv"},
   {match = "C49RG9x", value = "ultrawide"},
 ]
+templates = { short = "{{ raw[:2] }}", icon = "{% if raw == 'tv' %}T{% else %}U{% endif %}" }
 
 [[state]]
 name = "hour"
@@ -580,19 +581,34 @@ rewrite = [
   {match = "^(2[0-3]|0[0-7])$", value = "night"},
   {match = ".*", value = "day"},
 ]
+
+# Computed state — no cmd, just deps + templates
+[[state]]
+name = "summary"
+deps = ["machine", "screen", "hour"]
+templates = { default = "{{ machine.raw }}/{{ screen.raw }}/{{ hour.raw }}" }
 ```
 
-Rewrite rules are checked in order against raw stdout. First regex match wins, output replaced with `value`. No match = raw output.
+Rewrite rules are checked in order against raw stdout. First regex match wins, output replaced with `value`. No match = raw output. When a rewrite matches, the pre-rewrite value is preserved as `original`.
+
+### Templates
+
+Named Jinja templates rendered after cmd+rewrite. Context includes `raw`, `original`, and all dependency values (`dep.raw`, `dep.original`, `dep.<template>`).
+
+### Dependencies
+
+States can depend on other states via `deps`. Dependencies are evaluated first (topologically sorted), and their results are available in templates. States without `cmd` are computed purely from deps+templates.
 
 ```bash
 dek state                          # all probes, aligned key/value
-dek state --json                   # all probes as JSON object
+dek state --json                   # nested JSON: {"screen":{"raw":"tv","original":"Samsung...","icon":"T"}}
 dek state machine                  # single probe value
+dek state screen.icon              # named template value
+dek state screen.original          # pre-rewrite value
 dek state machine screen hour      # multiple probes
-dek state machine --json           # {"machine":"marko"}
-dek state networktype is ethernet  # exit 0 if match, 1 otherwise
-dek state networktype isnot wifi   # exit 0 if NOT match, 1 otherwise
+dek state screen.icon is T         # operators work on any variant
 dek state screen get tv ultra def  # "tv"/"ultra" pass through, else "def"
+dek state summary.default          # computed from deps: "hostname/tv/night"
 ```
 
 Alias: `s`. Useful in scripts:
@@ -601,6 +617,7 @@ Alias: `s`. Useful in scripts:
 dek s machine is marko && hyprctl dispatch ...
 dek s hour is night && notify-send "go to sleep"
 theme=$(dek s screen get tv ultrawide default)
+icon=$(dek s screen.icon)
 ```
 
 ## Bake
