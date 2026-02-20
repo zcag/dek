@@ -292,12 +292,27 @@ min_version = "0.1.28"               # auto-update dek if older
 defaults = ["@setup", "@deploy"]     # default selectors for apply
 inventory = "../devops/inventory.ini" # custom inventory path
 remote_install = true                # symlink dek + config on remote hosts
+bin_name = "mytool"                  # binary symlink name on remote (default: "dek")
+
+# Hide sections from the welcome screen
+hide = ["commands", "options", "usage"]  # values: "usage", "commands", "options", "configs", "run"
+
+# Custom entries shown as COMMANDS section on the welcome screen
+[[welcome]]
+name = "deploy"
+description = "Deploy to production"
+
+[[welcome]]
+name = "status"
+description = "Check service status"
 
 [test]
 image = "ubuntu:22.04"
 keep = true
 mount = ["./data:/opt/data"]         # bind mounts for test container
 ```
+
+When `name` is set, the welcome screen shows a "Powered by dek" line — useful for branded tools deployed via `remote_install`.
 
 ### Labels & Selectors
 

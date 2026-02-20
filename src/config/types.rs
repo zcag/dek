@@ -28,11 +28,23 @@ pub struct Meta {
     pub remote_install: bool,
     /// Custom binary name for remote_install symlink (defaults to "dek")
     pub bin_name: Option<String>,
+    /// Sections to hide from the welcome screen: "usage", "commands", "options", "configs", "run"
+    #[serde(default)]
+    pub hide: Vec<String>,
+    /// Custom entries shown as a COMMANDS section on the welcome screen
+    #[serde(default)]
+    pub welcome: Vec<WelcomeEntry>,
     /// Runtime variables set via std::env::set_var before any items run.
     /// Base vars are plain key=value, scoped vars are sub-tables keyed by
     /// selector (@label or config key).
     #[serde(default)]
     pub vars: Option<toml::Value>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct WelcomeEntry {
+    pub name: String,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]

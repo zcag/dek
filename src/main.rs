@@ -1805,34 +1805,57 @@ fn print_rich_help(meta: Option<&config::Meta>, config_path: &PathBuf) -> Result
     }
     println!();
 
+    let hide: &[String] = meta.map(|m| m.hide.as_slice()).unwrap_or(&[]);
+    let hidden = |s: &str| hide.iter().any(|h| h == s);
+
+    // Custom welcome entries
+    let welcome = meta.map(|m| m.welcome.as_slice()).unwrap_or(&[]);
+    if !welcome.is_empty() {
+        println!("  {}", c!("COMMANDS", dimmed));
+        for entry in welcome {
+            if let Some(ref d) = entry.description {
+                println!("    {}  {}", c!(&entry.name, yellow), c!(d, dimmed));
+            } else {
+                println!("    {}", c!(&entry.name, yellow));
+            }
+        }
+        println!();
+    }
+
     // Usage
-    println!("  {}", c!("USAGE", dimmed));
-    println!("    {} {} {}", c!(exe_name, cyan), c!("[OPTIONS]", dimmed), c!("<COMMAND>", white));
-    println!();
+    if !hidden("usage") {
+        println!("  {}", c!("USAGE", dimmed));
+        println!("    {} {} {}", c!(exe_name, cyan), c!("[OPTIONS]", dimmed), c!("<COMMAND>", white));
+        println!();
+    }
 
     // Commands
-    println!("  {}", c!("COMMANDS", dimmed));
-    println!("    {} {}  {}", c!("apply", white), c!("a", dimmed), c!("Apply configuration", dimmed));
-    println!("    {} {}  {}", c!("check", white), c!("c", dimmed), c!("Check what would change (dry-run)", dimmed));
-    println!("    {}  {}  {}", c!("plan", white), c!("p", dimmed), c!("List items from config", dimmed));
-    println!("    {}   {}  {}", c!("run", white), c!("r", dimmed), c!("Run a command from config", dimmed));
-    println!("    {}  {}  {}", c!("test", white), c!("t", dimmed), c!("Test in container", dimmed));
-    println!("    {} {}  {}", c!("exec", white), c!("dx", dimmed), c!("Run command in test container", dimmed));
-    println!("    {} {}  {}", c!("state", white), c!("s", dimmed), c!("Query system state probes", dimmed));
-    println!("    {}  {}  {}", c!("bake", white), c!(" ", dimmed), c!("Bake into standalone binary", dimmed));
-    println!();
+    if !hidden("commands") {
+        println!("  {}", c!("COMMANDS", dimmed));
+        println!("    {} {}  {}", c!("apply", white), c!("a", dimmed), c!("Apply configuration", dimmed));
+        println!("    {} {}  {}", c!("check", white), c!("c", dimmed), c!("Check what would change (dry-run)", dimmed));
+        println!("    {}  {}  {}", c!("plan", white), c!("p", dimmed), c!("List items from config", dimmed));
+        println!("    {}   {}  {}", c!("run", white), c!("r", dimmed), c!("Run a command from config", dimmed));
+        println!("    {}  {}  {}", c!("test", white), c!("t", dimmed), c!("Test in container", dimmed));
+        println!("    {} {}  {}", c!("exec", white), c!("dx", dimmed), c!("Run command in test container", dimmed));
+        println!("    {} {}  {}", c!("state", white), c!("s", dimmed), c!("Query system state probes", dimmed));
+        println!("    {}  {}  {}", c!("bake", white), c!(" ", dimmed), c!("Bake into standalone binary", dimmed));
+        println!();
+    }
 
     // Options
-    println!("  {}", c!("OPTIONS", dimmed));
-    println!("    {}  {}", c!("-C, --config <PATH>", white), c!("Config path", dimmed));
-    println!("    {}  {}", c!("-t, --target <HOST>", white), c!("Remote target (user@host)", dimmed));
-    println!("    {} {}", c!("-r, --remotes <PATTERN>", white), c!("Remote targets from inventory (glob)", dimmed));
-    println!("    {}              {}", c!("-h, --help", white), c!("Print help", dimmed));
-    println!("    {}           {}", c!("-V, --version", white), c!("Print version", dimmed));
-    println!();
+    if !hidden("options") {
+        println!("  {}", c!("OPTIONS", dimmed));
+        println!("    {}  {}", c!("-C, --config <PATH>", white), c!("Config path", dimmed));
+        println!("    {}  {}", c!("-t, --target <HOST>", white), c!("Remote target (user@host)", dimmed));
+        println!("    {} {}", c!("-r, --remotes <PATTERN>", white), c!("Remote targets from inventory (glob)", dimmed));
+        println!("    {}              {}", c!("-h, --help", white), c!("Print help", dimmed));
+        println!("    {}           {}", c!("-V, --version", white), c!("Print version", dimmed));
+        println!();
+    }
 
     // Available configs
-    if !configs.is_empty() {
+    if !configs.is_empty() && !hidden("configs") {
         let defaults = meta.map(|m| &m.defaults[..]).unwrap_or(&[]);
         if defaults.is_empty() {
             println!("  {}", c!("CONFIGS", dimmed));
@@ -1863,19 +1886,21 @@ fn print_rich_help(meta: Option<&config::Meta>, config_path: &PathBuf) -> Result
     }
 
     // Run commands
-    if let Some(run) = &cfg.run {
-        if !run.is_empty() {
-            println!("  {}", c!("RUN", dimmed));
-            let mut cmds: Vec<_> = run.iter().collect();
-            cmds.sort_by_key(|(k, _)| *k);
-            for (cmd_name, rc) in cmds {
-                if let Some(d) = &rc.description {
-                    println!("    {}  {}", c!(cmd_name, yellow), c!(d, dimmed));
-                } else {
-                    println!("    {}", c!(cmd_name, yellow));
+    if !hidden("run") {
+        if let Some(run) = &cfg.run {
+            if !run.is_empty() {
+                println!("  {}", c!("RUN", dimmed));
+                let mut cmds: Vec<_> = run.iter().collect();
+                cmds.sort_by_key(|(k, _)| *k);
+                for (cmd_name, rc) in cmds {
+                    if let Some(d) = &rc.description {
+                        println!("    {}  {}", c!(cmd_name, yellow), c!(d, dimmed));
+                    } else {
+                        println!("    {}", c!(cmd_name, yellow));
+                    }
                 }
+                println!();
             }
-            println!();
         }
     }
 
