@@ -26,6 +26,8 @@ pub struct Meta {
     /// Symlink config + binary on remote so `dek` works standalone after deploy
     #[serde(default)]
     pub remote_install: bool,
+    /// Custom binary name for remote_install symlink (defaults to "dek")
+    pub bin_name: Option<String>,
     /// Runtime variables set via std::env::set_var before any items run.
     /// Base vars are plain key=value, scoped vars are sub-tables keyed by
     /// selector (@label or config key).

@@ -455,6 +455,17 @@ With `remote_install = true` in `meta.toml`, dek symlinks itself and the config 
 ~/.local/bin/dek       → ~/.cache/dek/remote/dek   (non-root)
 ```
 
+Use `bin_name` to deploy as a custom-named tool:
+
+```toml
+# meta.toml
+name = "recover"           # display name (shown in welcome screen)
+remote_install = true
+bin_name = "recover"       # binary symlink name on remote
+```
+
+After deploy: `recover apply`, `recover run logs`, etc.
+
 This lets you run `dek` directly on the remote (e.g. `dek apply`, `dek run`) without re-deploying. Re-deploying updates the cached binary and config in-place, so the symlinks stay valid.
 
 ### Deploy Workflow

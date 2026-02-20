@@ -435,6 +435,7 @@ fn run_remote(target: &str, cmd: &str, config_path: Option<PathBuf>, configs: &[
     util::init_lib(&config_abs);
     let meta = config::load_meta(&config_path);
     let remote_install = meta.as_ref().map(|m| m.remote_install).unwrap_or(false);
+    let bin_name = meta.as_ref().and_then(|m| m.bin_name.as_deref()).unwrap_or("dek");
 
     output::print_header(&format!("{} on {}", cmd, target));
     println!();
@@ -456,7 +457,7 @@ fn run_remote(target: &str, cmd: &str, config_path: Option<PathBuf>, configs: &[
     );
     println!();
 
-    let result = deploy_to_host(target, cmd, configs, &payload, None, remote_install)?;
+    let result = deploy_to_host(target, cmd, configs, &payload, None, remote_install, bin_name)?;
 
     // Print full remote output for single-host
     for line in result.output.lines() {
@@ -485,7 +486,7 @@ struct DeployResult {
 
 fn deploy_to_host(
     target: &str, cmd: &str, configs: &[String], payload: &RemotePayload,
-    pb: Option<&indicatif::ProgressBar>, remote_install: bool,
+    pb: Option<&indicatif::ProgressBar>, remote_install: bool, bin_name: &str,
 ) -> Result<DeployResult> {
     let start = std::time::Instant::now();
     let remote_dir = "~/.cache/dek/remote";
@@ -545,10 +546,11 @@ fn deploy_to_host(
     if remote_install {
         let link_cmd = format!(
             "mkdir -p ~/.config && ln -sfn {cfg} ~/.config/dek && \
-             if [ \"$(id -u)\" = \"0\" ]; then ln -sf {bin} /usr/local/bin/dek; \
-             else mkdir -p ~/.local/bin && ln -sf {bin} ~/.local/bin/dek; fi",
+             if [ \"$(id -u)\" = \"0\" ]; then ln -sf {bin} /usr/local/bin/{bin_name}; \
+             else mkdir -p ~/.local/bin && ln -sf {bin} ~/.local/bin/{bin_name}; fi",
             cfg = remote_config.trim_end_matches('/'),
             bin = remote_bin,
+            bin_name = bin_name,
         );
         let _ = Command::new("ssh").args([target, &link_cmd]).output();
     }
@@ -585,6 +587,7 @@ fn run_remotes(pattern: &str, cmd: &str, config_path: Option<PathBuf>, configs: 
     util::init_lib(&config_abs);
     let meta = config::load_meta(&config_path);
     let remote_install = meta.as_ref().map(|m| m.remote_install).unwrap_or(false);
+    let bin_name = meta.as_ref().and_then(|m| m.bin_name.as_deref()).unwrap_or("dek");
     let inventory = config::load_inventory(&config_path)
         .ok_or_else(|| anyhow::anyhow!("No inventory.ini found in config directory"))?;
 
@@ -696,7 +699,7 @@ fn run_remotes(pattern: &str, cmd: &str, config_path: Option<PathBuf>, configs: 
             let configs = configs;
             let pb = &spinners[i];
             s.spawn(move || {
-                let result = deploy_to_host(host, cmd, configs, payload, Some(pb), remote_install);
+                let result = deploy_to_host(host, cmd, configs, payload, Some(pb), remote_install, bin_name);
                 let _ = tx.send((i, result));
             });
         }
@@ -1792,8 +1795,12 @@ fn print_rich_help(meta: Option<&config::Meta>, config_path: &PathBuf) -> Result
         (None, Some(v)) => println!("  {}", c!(format!("v{}", v), dimmed)),
         (None, None) => {}
     }
-    if let Some(info) = bake::get_bake_info() {
-        println!("  {}", c!("Powered by dek (https://github.com/zcag/dek)", dimmed));
+    let bake_info = bake::get_bake_info();
+    let is_branded = meta.and_then(|m| m.name.as_deref()).is_some();
+    if bake_info.is_some() || is_branded {
+        println!("  {}", c!("Powered by dek  https://github.com/zcag/dek", dimmed));
+    }
+    if let Some(info) = bake_info {
         println!("  {}", c!(info, dimmed));
     }
     println!();
