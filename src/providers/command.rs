@@ -1,5 +1,6 @@
 use super::{CheckResult, Provider, StateItem};
 use anyhow::{bail, Result};
+use indicatif::ProgressBar;
 use std::io::Write;
 
 pub struct CommandProvider;
@@ -32,7 +33,7 @@ impl Provider for CommandProvider {
         }
     }
 
-    fn apply(&self, state: &StateItem) -> Result<()> {
+    fn apply_live(&self, state: &StateItem, pb: &ProgressBar) -> Result<()> {
         let value = state.value.as_ref()
             .ok_or_else(|| anyhow::anyhow!("Command '{}' missing scripts", state.key))?;
 
@@ -43,11 +44,14 @@ impl Provider for CommandProvider {
 
         if confirm {
             use owo_colors::OwoColorize;
-            print!("Apply {}? [y/N] ", c!(state.key, bold));
-            std::io::stdout().flush()?;
-            let mut input = String::new();
-            std::io::stdin().read_line(&mut input)?;
-            if !input.trim().eq_ignore_ascii_case("y") {
+            let proceed = pb.suspend(|| -> Result<bool> {
+                print!("Apply {}? [y/N] ", c!(state.key, bold));
+                std::io::stdout().flush()?;
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input)?;
+                Ok(input.trim().eq_ignore_ascii_case("y"))
+            })?;
+            if !proceed {
                 return Ok(());
             }
         }
@@ -62,5 +66,9 @@ impl Provider for CommandProvider {
         }
 
         Ok(())
+    }
+
+    fn apply(&self, _state: &StateItem) -> Result<()> {
+        unreachable!("apply_live overridden")
     }
 }

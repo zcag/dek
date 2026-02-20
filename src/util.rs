@@ -492,14 +492,17 @@ pub fn init_lib(config_path: &Path) {
 }
 
 /// Create a `sh -c` command, sourcing DEK_LIB first if set.
+/// Uses bash when DEK_LIB is set, since functions.sh likely uses bash syntax.
 pub fn shell_cmd(script: &str) -> Command {
-    let mut cmd = Command::new("sh");
     if let Ok(lib) = std::env::var("DEK_LIB") {
+        let mut cmd = Command::new("bash");
         cmd.arg("-c").arg(format!(". {lib}\n{script}"));
+        cmd
     } else {
+        let mut cmd = Command::new("sh");
         cmd.arg("-c").arg(script);
+        cmd
     }
-    cmd
 }
 
 /// Create tar.gz from a path (file or directory)

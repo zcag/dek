@@ -258,8 +258,7 @@ fn load_from_dir_inner(dir: &Path, filter_keys: Option<&[String]>, merged: &mut 
 }
 
 pub fn eval_run_if(cmd: &str) -> bool {
-    std::process::Command::new("sh")
-        .args(["-c", cmd])
+    crate::util::shell_cmd(cmd)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()

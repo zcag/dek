@@ -447,11 +447,15 @@ inventory = "../devops/inventory.ini"
 With `remote_install = true` in `meta.toml`, dek symlinks itself and the config on remote hosts after deploy:
 
 ```
-~/.local/bin/dek → /tmp/dek-remote/dek
-~/.config/dek   → /tmp/dek-remote/config/
+~/.cache/dek/remote/dek      ← binary (persists across reboots)
+~/.cache/dek/remote/config/  ← config
+
+~/.config/dek          → ~/.cache/dek/remote/config/
+/usr/local/bin/dek     → ~/.cache/dek/remote/dek   (root)
+~/.local/bin/dek       → ~/.cache/dek/remote/dek   (non-root)
 ```
 
-This lets you run `dek` directly on the remote (e.g. `dek run`, `dek list`) without re-deploying.
+This lets you run `dek` directly on the remote (e.g. `dek apply`, `dek run`) without re-deploying. Re-deploying updates the cached binary and config in-place, so the symlinks stay valid.
 
 ### Deploy Workflow
 

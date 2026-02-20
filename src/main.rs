@@ -432,6 +432,7 @@ impl RemotePayload {
 fn run_remote(target: &str, cmd: &str, config_path: Option<PathBuf>, configs: &[String]) -> Result<()> {
     let config_path = resolve_config(config_path)?;
     let config_abs = std::fs::canonicalize(&config_path)?;
+    util::init_lib(&config_abs);
     let meta = config::load_meta(&config_path);
     let remote_install = meta.as_ref().map(|m| m.remote_install).unwrap_or(false);
 
@@ -487,7 +488,7 @@ fn deploy_to_host(
     pb: Option<&indicatif::ProgressBar>, remote_install: bool,
 ) -> Result<DeployResult> {
     let start = std::time::Instant::now();
-    let remote_dir = "/tmp/dek-remote";
+    let remote_dir = "~/.cache/dek/remote";
     let remote_bin = format!("{}/dek", remote_dir);
     let remote_config = format!("{}/config/", remote_dir);
     let mut log = String::new();
@@ -543,8 +544,11 @@ fn deploy_to_host(
     // Symlink config + binary so `dek` works standalone on remote
     if remote_install {
         let link_cmd = format!(
-            "mkdir -p ~/.config ~/.local/bin && ln -sfn {} ~/.config/dek && ln -sf {} ~/.local/bin/dek",
-            remote_config.trim_end_matches('/'), remote_bin
+            "mkdir -p ~/.config && ln -sfn {cfg} ~/.config/dek && \
+             if [ \"$(id -u)\" = \"0\" ]; then ln -sf {bin} /usr/local/bin/dek; \
+             else mkdir -p ~/.local/bin && ln -sf {bin} ~/.local/bin/dek; fi",
+            cfg = remote_config.trim_end_matches('/'),
+            bin = remote_bin,
         );
         let _ = Command::new("ssh").args([target, &link_cmd]).output();
     }
@@ -578,6 +582,7 @@ fn run_remotes(pattern: &str, cmd: &str, config_path: Option<PathBuf>, configs: 
 
     let config_path = resolve_config(config_path.clone())?;
     let config_abs = std::fs::canonicalize(&config_path)?;
+    util::init_lib(&config_abs);
     let meta = config::load_meta(&config_path);
     let remote_install = meta.as_ref().map(|m| m.remote_install).unwrap_or(false);
     let inventory = config::load_inventory(&config_path)
@@ -1051,6 +1056,7 @@ fn run_command_remote(
 
     let path = resolve_config(config_path)?;
     let resolved_path = config::resolve_path(&path)?;
+    util::init_lib(&resolved_path);
 
     // Apply runtime vars from meta.toml
     let meta = config::load_meta(&resolved_path);

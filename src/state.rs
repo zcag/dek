@@ -324,6 +324,11 @@ pub fn run(
 ) -> Result<()> {
     let path = crate::resolve_config(config_path)?;
     let resolved_path = config::resolve_path(&path)?;
+    crate::util::init_lib(&resolved_path);
+    let meta = config::load_meta(&resolved_path);
+    if let Some(ref vars) = meta.as_ref().and_then(|m| m.vars.as_ref()) {
+        config::apply_vars(vars, &[]);
+    }
     let cfg = config::load_all(&resolved_path)?;
 
     if cfg.state.is_empty() {
