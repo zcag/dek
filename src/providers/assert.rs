@@ -1,6 +1,5 @@
 use super::{CheckResult, Provider, StateItem};
 use anyhow::Result;
-use std::process::Command;
 
 pub struct AssertProvider;
 
@@ -24,7 +23,7 @@ impl Provider for AssertProvider {
         let message = parts.get(4).filter(|s| !s.is_empty()).copied();
 
         if mode == "foreach" {
-            let output = Command::new("sh").arg("-c").arg(cmd).output()?;
+            let output = crate::util::shell_cmd(cmd).output()?;
             let stdout = String::from_utf8_lossy(&output.stdout);
             let lines: Vec<&str> = stdout.lines().filter(|l| !l.is_empty()).collect();
             if lines.is_empty() {
@@ -36,7 +35,7 @@ impl Provider for AssertProvider {
             }
         } else {
             // check mode
-            let output = Command::new("sh").arg("-c").arg(cmd).output()?;
+            let output = crate::util::shell_cmd(cmd).output()?;
 
             if !output.status.success() {
                 let detail = if let Some(msg) = message {

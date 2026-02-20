@@ -74,8 +74,7 @@ impl StateItem {
 /// Resolve cache key: prefer cache_key_cmd (run command), fall back to cache_key (expand vars)
 fn resolve_cache_key(key: Option<String>, cmd: Option<String>) -> Option<String> {
     if let Some(cmd) = cmd {
-        let output = std::process::Command::new("sh")
-            .args(["-c", &cmd])
+        let output = crate::util::shell_cmd(&cmd)
             .output()
             .ok()?;
         if output.status.success() {

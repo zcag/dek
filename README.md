@@ -376,6 +376,35 @@ dek run logs -t server1           # tty command (interactive)
 - **`confirm: true`** — prompts `[y/N]` before running (works both locally and remotely).
 - **Vars** — base vars from `meta.toml` `[vars]` are exported to the remote shell automatically, so `$VAR` references in remote commands resolve correctly.
 
+## Shell Library
+
+Put shared shell functions in `data/functions.sh` under your config directory. dek automatically sources it before every `cmd`, `check`, `apply`, `run`, and `assert` script:
+
+```
+~/.config/dek/
+  data/
+    functions.sh   ← sourced automatically
+  10-tools.toml
+  20-apps.toml
+```
+
+```bash
+# data/functions.sh
+is_laptop() { [ "$(uname -n)" = "thinkpad" ]; }
+has_display() { [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; }
+```
+
+```toml
+[[command]]
+name = "laptop-brightness"
+check = "is_laptop && has_display && cat /sys/class/backlight/*/brightness | grep -q ."
+apply = "is_laptop && brightnessctl set 50%"
+
+[[state]]
+name = "laptop"
+cmd = "is_laptop && echo yes || echo no"
+```
+
 ## Remote
 
 Apply to remote hosts via SSH:

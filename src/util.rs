@@ -478,6 +478,30 @@ pub fn extract_tar_gz(path: &Path) -> Result<PathBuf> {
     Ok(cache_dir)
 }
 
+/// Set DEK_LIB to data/functions.sh if it exists under the config directory.
+pub fn init_lib(config_path: &Path) {
+    let base = if config_path.is_dir() {
+        config_path.to_path_buf()
+    } else {
+        config_path.parent().unwrap_or(Path::new(".")).to_path_buf()
+    };
+    let lib = base.join("data/functions.sh");
+    if lib.exists() {
+        std::env::set_var("DEK_LIB", lib);
+    }
+}
+
+/// Create a `sh -c` command, sourcing DEK_LIB first if set.
+pub fn shell_cmd(script: &str) -> Command {
+    let mut cmd = Command::new("sh");
+    if let Ok(lib) = std::env::var("DEK_LIB") {
+        cmd.arg("-c").arg(format!(". {lib}\n{script}"));
+    } else {
+        cmd.arg("-c").arg(script);
+    }
+    cmd
+}
+
 /// Create tar.gz from a path (file or directory)
 pub fn create_tar_gz(path: &Path) -> Result<Vec<u8>> {
     let mut tar_data = Vec::new();

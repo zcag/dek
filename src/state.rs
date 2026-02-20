@@ -143,8 +143,7 @@ fn eval_single(state: &StateConfig, dep_results: &HashMap<String, &StateResult>)
             }
         }
 
-        let output = Command::new("sh")
-            .args(["-c", cmd])
+        let output = crate::util::shell_cmd(cmd)
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .output()

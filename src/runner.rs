@@ -242,8 +242,7 @@ fn update_cache(item: &StateItem) {
 fn should_run(item: &StateItem) -> bool {
     match &item.run_if {
         None => true,
-        Some(cmd) => Command::new("sh")
-            .args(["-c", cmd])
+        Some(cmd) => crate::util::shell_cmd(cmd)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
@@ -539,7 +538,7 @@ fn collect_state_items(config: &Config, base_dir: &Path) -> Vec<StateItem> {
     // Commands (check/apply)
     for cmd in &config.command {
         // Encode check and apply with null separator
-        let value = format!("{}\x00{}", cmd.check, cmd.apply);
+        let value = format!("{}\x00{}\x00{}", cmd.check, cmd.apply, if cmd.confirm { "1" } else { "" });
         items.push(
             StateItem::new("command", &cmd.name)
                 .with_value(value)

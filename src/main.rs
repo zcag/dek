@@ -361,6 +361,7 @@ pub(crate) fn resolve_config(config: Option<PathBuf>) -> Result<PathBuf> {
 fn run_mode(mode: runner::Mode, config_path: Option<PathBuf>, configs: Vec<String>, quiet: bool, prepared: bool) -> Result<()> {
     let path = resolve_config(config_path)?;
     let resolved_path = config::resolve_path(&path)?;
+    util::init_lib(&resolved_path);
     let meta = config::load_meta(&resolved_path);
     check_min_version(meta.as_ref())?;
 
@@ -758,9 +759,7 @@ fn run_local_command(name: &str, run_cfg: &config::RunConfig, config_path: &std:
         bail!("Local command '{}' has no cmd or script", name);
     };
 
-    let status = Command::new("sh")
-        .arg("-c")
-        .arg(&script)
+    let status = util::shell_cmd(&script)
         .current_dir(base_dir)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
@@ -826,8 +825,8 @@ pub(crate) fn prepare_config(config_path: &std::path::Path, dek_config: &config:
                 !artifact_watch_fresh(base_dir, artifact, &src_path)
             } else if let Some(ref cmd) = artifact.check {
                 // check mode: run shell command
-                !Command::new("sh")
-                    .arg("-c").arg(cmd).current_dir(base_dir)
+                !util::shell_cmd(cmd)
+                    .current_dir(base_dir)
                     .stdout(Stdio::null()).stderr(Stdio::null())
                     .status()
                     .map(|s| s.success())
@@ -1271,6 +1270,7 @@ fn run_command(config_path: Option<PathBuf>, name: Option<String>, args: Vec<Str
 
     let path = resolve_config(config_path)?;
     let resolved_path = config::resolve_path(&path)?;
+    util::init_lib(&resolved_path);
 
     // Apply runtime vars from meta.toml
     let meta = config::load_meta(&resolved_path);
@@ -1352,9 +1352,7 @@ fn run_command(config_path: Option<PathBuf>, name: Option<String>, args: Vec<Str
 
     // Run shell command if present
     if let Some(ref cmd) = run_config.cmd {
-        let status = Command::new("sh")
-            .arg("-c")
-            .arg(cmd)
+        let status = util::shell_cmd(cmd)
             .arg("_")
             .args(&args)
             .stdin(Stdio::inherit())
@@ -1370,9 +1368,7 @@ fn run_command(config_path: Option<PathBuf>, name: Option<String>, args: Vec<Str
         let script = std::fs::read_to_string(&full_path)
             .map_err(|e| anyhow::anyhow!("Failed to read script '{}': {}", full_path.display(), e))?;
 
-        let status = Command::new("sh")
-            .arg("-c")
-            .arg(&script)
+        let status = util::shell_cmd(&script)
             .arg("_")
             .args(&args)
             .stdin(Stdio::inherit())

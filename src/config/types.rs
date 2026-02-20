@@ -254,6 +254,9 @@ pub struct CommandConfig {
     /// Skip if this command's output hasn't changed since last apply
     #[serde(default)]
     pub cache_key_cmd: Option<String>,
+    /// Prompt [y/N] before applying
+    #[serde(default)]
+    pub confirm: bool,
 }
 
 /// Runnable command (dek run <name>)
