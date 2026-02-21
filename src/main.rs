@@ -1795,18 +1795,21 @@ fn print_rich_help(meta: Option<&config::Meta>, config_path: &PathBuf) -> Result
         (None, Some(v)) => println!("  {}", c!(format!("v{}", v), dimmed)),
         (None, None) => {}
     }
+    let hide: &[String] = meta.map(|m| m.hide.as_slice()).unwrap_or(&[]);
+    let hidden = |s: &str| hide.iter().any(|h| h == s);
     let bake_info = bake::get_bake_info();
     let is_branded = meta.and_then(|m| m.name.as_deref()).is_some();
-    if bake_info.is_some() || is_branded {
-        println!("  {}", c!("Powered by dek  https://github.com/zcag/dek", dimmed));
+    if (bake_info.is_some() || is_branded) && !hidden("powered") {
+        if hidden("powered_url") {
+            println!("  {}", c!("Powered by dek", dimmed));
+        } else {
+            println!("  {}", c!("Powered by dek  https://github.com/zcag/dek", dimmed));
+        }
     }
     if let Some(info) = bake_info {
         println!("  {}", c!(info, dimmed));
     }
     println!();
-
-    let hide: &[String] = meta.map(|m| m.hide.as_slice()).unwrap_or(&[]);
-    let hidden = |s: &str| hide.iter().any(|h| h == s);
 
     // Custom welcome entries
     let welcome = meta.map(|m| m.welcome.as_slice()).unwrap_or(&[]);

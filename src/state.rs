@@ -187,7 +187,7 @@ fn eval_single(state: &StateConfig, dep_results: &HashMap<String, &StateResult>)
                 for (tmpl_name, tmpl_val) in &dep_result.templates {
                     dep_map.insert(tmpl_name.clone(), serde_json::Value::String(tmpl_val.clone()));
                 }
-                ctx.insert(dep_name.clone(), minijinja::Value::from_serialize(&dep_map));
+                ctx.insert(dep_name.replace('-', "_"), minijinja::Value::from_serialize(&dep_map));
             }
             env.add_template("_expr", expr).ok();
             env.get_template("_expr")
@@ -248,7 +248,7 @@ fn eval_single(state: &StateConfig, dep_results: &HashMap<String, &StateResult>)
             for (tmpl_name, tmpl_val) in &dep_result.templates {
                 dep_map.insert(tmpl_name.clone(), serde_json::Value::String(tmpl_val.clone()));
             }
-            ctx.insert(dep_name.clone(), minijinja::Value::from_serialize(&dep_map));
+            ctx.insert(dep_name.replace('-', "_"), minijinja::Value::from_serialize(&dep_map));
         }
 
         for (tmpl_name, tmpl_src) in &state.templates {
@@ -505,12 +505,19 @@ pub fn run(
                 None => name.to_string(),
             };
             use owo_colors::OwoColorize;
-            println!(
-                "  {:>width$}  {}",
-                c!(label, cyan),
-                c!(value, bold),
-                width = max_name
-            );
+            let lines: Vec<&str> = value.lines().collect();
+            let mut lines = value.lines();
+            if let Some(first) = lines.next() {
+                println!(
+                    "  {:>width$}  {}",
+                    c!(label, cyan),
+                    c!(first, bold),
+                    width = max_name
+                );
+                for line in lines {
+                    println!("{:indent$}{}", "", c!(line, bold), indent = max_name + 4);
+                }
+            }
         }
     }
     Ok(())

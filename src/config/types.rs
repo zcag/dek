@@ -28,7 +28,7 @@ pub struct Meta {
     pub remote_install: bool,
     /// Custom binary name for remote_install symlink (defaults to "dek")
     pub bin_name: Option<String>,
-    /// Sections to hide from the welcome screen: "usage", "commands", "options", "configs", "run"
+    /// Sections to hide from the welcome screen: "usage", "commands", "options", "configs", "run", "powered", "powered_url"
     #[serde(default)]
     pub hide: Vec<String>,
     /// Custom entries shown as a COMMANDS section on the welcome screen

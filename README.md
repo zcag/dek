@@ -295,7 +295,8 @@ remote_install = true                # symlink dek + config on remote hosts
 bin_name = "mytool"                  # binary symlink name on remote (default: "dek")
 
 # Hide sections from the welcome screen
-hide = ["commands", "options", "usage"]  # values: "usage", "commands", "options", "configs", "run"
+# values: "usage", "commands", "options", "configs", "run", "powered", "powered_url"
+hide = ["commands", "options", "usage", "powered_url"]
 
 # Custom entries shown as COMMANDS section on the welcome screen
 [[welcome]]
