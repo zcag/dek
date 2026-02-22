@@ -246,7 +246,13 @@ fn main() -> Result<()> {
         }
         Some(Commands::Test { image, rm, fresh, attach, selectors }) => run_test(config, image, rm, fresh, attach, selectors),
         Some(Commands::Exec { cmd }) => run_exec(config, cmd),
-        Some(Commands::State { name, json, args }) => state::run(config, name, json, args),
+        Some(Commands::State { name, json, args }) => {
+            if let Some(t) = target {
+                run_state_remote(&t, config, name, json, args)
+            } else {
+                state::run(config, name, json, args)
+            }
+        }
         Some(Commands::Bake { config: bake_config, output }) => {
             bake::run(bake_config.or(config), output)
         }
@@ -473,6 +479,87 @@ fn run_remote(target: &str, cmd: &str, config_path: Option<PathBuf>, configs: &[
         bail!("Remote command failed on {}", target);
     }
 
+    Ok(())
+}
+
+fn run_state_remote(
+    target: &str,
+    config_path: Option<PathBuf>,
+    name: Option<String>,
+    json: bool,
+    args: Vec<String>,
+) -> Result<()> {
+    let config_path = resolve_config(config_path)?;
+    let config_abs = std::fs::canonicalize(&config_path)?;
+
+    output::print_header(&format!("state on {}", target));
+    println!();
+
+    let dek_config = config::load(&config_path)?;
+    let prepared_config = prepare_config(&config_abs, &dek_config)?;
+    let prepared_abs = std::fs::canonicalize(&prepared_config)?;
+    let payload = RemotePayload::prepare(&prepared_abs)?;
+
+    let remote_dir = "~/.cache/dek/remote";
+    let remote_bin = format!("{}/dek", remote_dir);
+    let remote_config = format!("{}/config/", remote_dir);
+
+    // Check connection + binary hash
+    let check_cmd = format!(
+        "mkdir -p {} && if [ -f {} ]; then md5sum {} | cut -d' ' -f1; fi",
+        remote_dir, remote_bin, remote_bin
+    );
+    let check_output = Command::new("ssh").args([target, &check_cmd]).output()?;
+    if !check_output.status.success() {
+        bail!("Failed to connect to {}", target);
+    }
+    let remote_hash = String::from_utf8_lossy(&check_output.stdout).trim().to_string();
+
+    // Upload binary only if hash differs
+    if remote_hash != payload.bin_hash {
+        println!("  {} uploading binary...", c!("→", yellow));
+        let scp = Command::new("scp")
+            .args(["-q", &payload.dek_binary.to_string_lossy(), &format!("{}:{}", target, remote_bin)])
+            .status()?;
+        if !scp.success() {
+            bail!("Failed to copy dek binary to {}", target);
+        }
+    }
+
+    // Rsync config
+    let local_src = format!("{}/", payload.prepared_dir.display());
+    let remote_dest = format!("{}:{}", target, remote_config);
+    let rsync = Command::new("rsync")
+        .args(["-az", "--delete", &local_src, &remote_dest])
+        .output()?;
+    if !rsync.status.success() {
+        bail!("Failed to rsync config to {}: {}", target, String::from_utf8_lossy(&rsync.stderr).trim());
+    }
+
+    // Build remote state command
+    let mut parts = vec![
+        remote_bin,
+        "--prepared".to_string(),
+        "state".to_string(),
+        "-C".to_string(),
+        remote_config,
+    ];
+    if let Some(n) = name {
+        parts.push(n);
+    }
+    if json {
+        parts.push("--json".to_string());
+    }
+    for arg in args {
+        parts.push(arg);
+    }
+    let remote_cmd = parts.join(" ");
+
+    // Stream output directly
+    let status = Command::new("ssh").args([target, &remote_cmd]).status()?;
+    if !status.success() {
+        bail!("Remote state failed on {}", target);
+    }
     Ok(())
 }
 
