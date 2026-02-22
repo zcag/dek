@@ -281,9 +281,11 @@ fn get_config_entries(dir: &Path) -> Result<Vec<fs::DirEntry>> {
     Ok(entries)
 }
 
-/// Extract key from filename: "10-tools.toml" -> "tools", "config.toml" -> "config"
+/// Extract key from filename: "10-tools.toml" -> "tools", "tools.dek.toml" -> "tools"
 fn file_key(path: &Path) -> String {
     let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    // Strip .dek suffix (for *.dek.toml files used with nvim-dek)
+    let stem = stem.strip_suffix(".dek").unwrap_or(&stem);
     // Strip numeric prefix like "10-", "00-"
     if let Some(pos) = stem.find('-') {
         if stem[..pos].chars().all(|c| c.is_ascii_digit()) {
