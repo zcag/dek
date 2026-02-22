@@ -558,23 +558,33 @@ fn deploy_to_host(
     // Run dek on remote
     update(&format!("running {}...", cmd));
     let configs_arg = configs.join(" ");
-    let remote_cmd = format!("{} -q --prepared {} -C {} {}", remote_bin, cmd, remote_config, configs_arg);
 
-    let output = Command::new("ssh")
-        .args([target, &remote_cmd])
-        .output()?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    log.push_str(&stdout);
-    if !stderr.is_empty() {
-        log.push_str(&stderr);
-    }
+    let success = if pb.is_some() {
+        // Multi-host: capture output for the progress display
+        let remote_cmd = format!("{} -q --prepared {} -C {} {}", remote_bin, cmd, remote_config, configs_arg);
+        let output = Command::new("ssh")
+            .args([target, &remote_cmd])
+            .output()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        log.push_str(&stdout);
+        if !stderr.is_empty() {
+            log.push_str(&stderr);
+        }
+        output.status.success()
+    } else {
+        // Single-host: stream output directly
+        let remote_cmd = format!("{} --prepared {} -C {} {}", remote_bin, cmd, remote_config, configs_arg);
+        Command::new("ssh")
+            .args([target, &remote_cmd])
+            .status()?
+            .success()
+    };
 
     Ok(DeployResult {
         host: target.to_string(),
         output: log,
-        success: output.status.success(),
+        success,
         duration: start.elapsed(),
     })
 }
