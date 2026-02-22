@@ -799,6 +799,19 @@ site_vars:
 
 In templates: `{{ site_vars.site_id }}`, `{% for s in site_vars.kafka_server %}{{ s }}{% endfor %}`.
 
+## Editor Support
+
+### Neovim
+
+[nvim-dek](https://github.com/zcag/nvim-dek) provides syntax highlighting for dek config files — injects bash into `cmd`/`apply`/`check`/`foreach` keys and Jinja2 into `templates`/`expr` keys.
+
+```lua
+-- lazy.nvim
+{ "zcag/nvim-dek" }
+```
+
+Requires the tree-sitter TOML parser (`TSInstall toml`). Files named `*.dek.toml` are detected automatically. For other `.toml` files, add `# vim: ft=dek` anywhere in the first few lines.
+
 ## Bake
 
 Embed config into a standalone binary:
