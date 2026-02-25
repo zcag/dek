@@ -1440,9 +1440,12 @@ fn run_command(config_path: Option<PathBuf>, name: Option<String>, args: Vec<Str
         output::print_header(&format!("Resolving deps for {}", name));
         println!();
 
-        let items: Result<Vec<_>> = run_config.deps.iter().map(|d| parse_provider_spec(d)).collect();
+        let mut items = Vec::new();
+        for dep in &run_config.deps {
+            items.extend(parse_provider_spec(dep)?);
+        }
         let runner = runner::Runner::new(runner::Mode::Apply);
-        runner.run_items(&items?)?;
+        runner.run_items(&items)?;
         println!();
     }
 
@@ -1492,9 +1495,10 @@ fn run_command(config_path: Option<PathBuf>, name: Option<String>, args: Vec<Str
     Ok(())
 }
 
-/// Parse "provider.package" spec into StateItem
-fn parse_provider_spec(spec: &str) -> Result<providers::StateItem> {
-    let (provider, package) = spec
+/// Parse "provider.pkg[,pkg2,...]" spec into one or more StateItems.
+/// Supports grouping: `pacman.grim,slurp,tesseract`
+fn parse_provider_spec(spec: &str) -> Result<Vec<providers::StateItem>> {
+    let (provider, packages) = spec
         .split_once('.')
         .ok_or_else(|| anyhow::anyhow!("Invalid spec '{}'. Use provider.package (e.g., cargo.bat)", spec))?;
 
@@ -1510,16 +1514,19 @@ fn parse_provider_spec(spec: &str) -> Result<providers::StateItem> {
         _ => bail!("Unknown provider '{}'. Use: os, apt, pacman, cargo, go, npm, pip, webi", provider),
     };
 
-    Ok(providers::StateItem::new(kind, package))
+    Ok(packages.split(',').map(|pkg| providers::StateItem::new(kind, pkg.trim())).collect())
 }
 
 fn run_inline(specs: &[String]) -> Result<()> {
     output::print_header("Installing");
     println!();
 
-    let items: Result<Vec<_>> = specs.iter().map(|s| parse_provider_spec(s)).collect();
+    let mut items = Vec::new();
+    for spec in specs {
+        items.extend(parse_provider_spec(spec)?);
+    }
     let runner = runner::Runner::new(runner::Mode::Apply);
-    runner.run_items(&items?)
+    runner.run_items(&items)
 }
 
 /// Derive the test container name from config metadata.
