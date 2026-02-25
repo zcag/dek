@@ -1031,7 +1031,7 @@ fn resolve_artifact_deps(deps: &[String]) -> Result<()> {
         println!("    {} installing {} (for {})...", c!("→", yellow), pkg, bin);
         match provider {
             Some("apt") => util::SysPkgManager::Apt.install(&pkg)?,
-            Some("pacman") => util::SysPkgManager::Pacman.install(&pkg)?,
+            Some("pacman") | Some("pac") => util::SysPkgManager::Pacman.install(&pkg)?,
             Some("brew") => util::SysPkgManager::Brew.install(&pkg)?,
             None | Some("os") => {
                 let pm = util::SysPkgManager::detect()
@@ -1505,13 +1505,13 @@ fn parse_provider_spec(spec: &str) -> Result<Vec<providers::StateItem>> {
     let kind = match provider {
         "os" => "package.os",
         "apt" => "package.apt",
-        "pacman" => "package.pacman",
+        "pacman" | "pac" => "package.pacman",
         "cargo" => "package.cargo",
         "go" => "package.go",
         "npm" => "package.npm",
         "pip" => "package.pip",
         "webi" => "package.webi",
-        _ => bail!("Unknown provider '{}'. Use: os, apt, pacman, cargo, go, npm, pip, webi", provider),
+        _ => bail!("Unknown provider '{}'. Use: os, apt, pacman (pac), cargo, go, npm, pip, webi", provider),
     };
 
     Ok(packages.split(',').map(|pkg| providers::StateItem::new(kind, pkg.trim())).collect())
