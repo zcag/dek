@@ -553,6 +553,13 @@ dek os.htop os.git cargo.bat
 dek pip.httpie npm.prettier
 ```
 
+Group multiple packages from the same provider with commas:
+
+```bash
+dek pacman.grim,slurp,tesseract
+dek cargo.bat,eza,ripgrep
+```
+
 ## Test
 
 Bakes config into the binary and runs it in a container. The baked `dek` inside the container is fully functional — `apply`, `list`, `run` all work.
