@@ -105,52 +105,80 @@ fn fmt_left(until: &chrono::DateTime<chrono::Local>) -> String {
     }
 }
 
-/// `dek state <name> info`: everything behind one value, for when the value
-/// is a surprise. Override first, since that is the usual reason. `--full`
-/// recurses into the deps, each block indented under the one that needs it.
+/// `dek state <name> info`: everything behind one value, drawn as a tree.
+///
+///   working  off  (set until 23:59, 3h left; computed on)
+///   ├ expr  {% if day.raw == 'workday' ... %}
+///   ├ day  workday
+///   └ workhours  in
+///
+/// Probe names are cyan, values bold, an override yellow with its reason dimmed
+/// beside it, attribute keys dimmed -- the same vocabulary as the listing. Deps
+/// are always drawn as nodes; `--full` recurses into them.
+fn node_label(state: &StateConfig, r: &StateResult) -> String {
+    use owo_colors::OwoColorize;
+    let name = format!("{}", c!(c!(state.name, cyan), bold));
+    if let Some(u) = &r.override_until {
+        let note = format!(
+            "(set {}, {} left; computed {})",
+            fmt_until(u),
+            fmt_left(u),
+            r.original.as_deref().unwrap_or("")
+        );
+        format!("{}  {}  {}", name, c!(c!(r.raw, yellow), bold), c!(note, dimmed))
+    } else if let Some(o) = &r.original {
+        let note = format!("(rewritten from {:?})", o);
+        format!("{}  {}  {}", name, c!(r.raw, bold), c!(note, dimmed))
+    } else {
+        format!("{}  {}", name, c!(r.raw, bold))
+    }
+}
+
 fn print_info(
     state: &StateConfig,
     results: &HashMap<&str, &StateResult>,
     states: &[StateConfig],
     full: bool,
-    depth: usize,
+    prefix: &str,
 ) {
     use owo_colors::OwoColorize;
     let Some(r) = results.get(state.name.as_str()) else { return };
-    let pad = "    ".repeat(depth);
-    // Key column wide enough for the longest probe name, so nested blocks line up
-    let w = states.iter().map(|s| s.name.len()).max().unwrap_or(0).max(9);
-    let row = |k: &str, v: String| println!("{}  {:>w$}  {}", pad, c!(k, cyan), v, w = w);
-    if depth == 0 {
-        row(&state.name, format!("{}", c!(r.raw, bold)));
-    }
-    if let Some(u) = &r.override_until {
-        row("override", format!("{}, {} left", fmt_until(u), fmt_left(u)));
-        row("computed", r.original.clone().unwrap_or_default());
-    } else if let Some(o) = &r.original {
-        row("rewrite", format!("{} <- {}", r.raw, o));
-    }
+    let mut attrs: Vec<(String, String)> = Vec::new();
     if let Some(cmd) = &state.cmd {
-        row("cmd", cmd.lines().next().unwrap_or("").trim().to_string());
+        attrs.push(("cmd".into(), cmd.lines().next().unwrap_or("").trim().to_string()));
     }
     if let Some(expr) = &state.expr {
-        row("expr", expr.clone());
+        attrs.push(("expr".into(), expr.clone()));
     }
     if let Some(ttl) = &state.ttl {
-        row("ttl", ttl.clone());
+        attrs.push(("ttl".into(), ttl.clone()));
     }
-    let mut names: Vec<_> = r.templates.iter().collect();
-    names.sort();
-    for (k, v) in names {
-        row(&format!(".{}", k), v.clone());
+    let mut tmpl: Vec<_> = r.templates.iter().collect();
+    tmpl.sort();
+    for (k, v) in tmpl {
+        attrs.push((format!(".{}", k), v.clone()));
     }
-    // A dep is always a `dep  name = value` row; --full hangs its details below it
-    for d in &state.deps {
-        let v = results.get(d.as_str()).map(|x| x.raw.as_str()).unwrap_or("?");
-        row("dep", format!("{} = {}", c!(d, bold), v));
-        if full {
-            if let Some(dep) = states.iter().find(|s| &s.name == d) {
-                print_info(dep, results, states, true, depth + 1);
+    let deps: Vec<&StateConfig> = state
+        .deps
+        .iter()
+        .filter_map(|d| states.iter().find(|s| &s.name == d))
+        .collect();
+    let n = attrs.len() + deps.len();
+    let kw = attrs.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+    // Tree furniture (prefix + branch) is dimmed as one run, so the eye lands on
+    // the names and values, not the lines
+    let branch = |i: usize| format!("{}{}", prefix, if i + 1 == n { "└ " } else { "├ " });
+    for (i, (k, v)) in attrs.iter().enumerate() {
+        let key = format!("{:<kw$}", k, kw = kw);
+        println!("{}{}  {}", c!(branch(i), dimmed), c!(key, dimmed), v);
+    }
+    for (j, dep) in deps.iter().enumerate() {
+        let i = attrs.len() + j;
+        if let Some(dr) = results.get(dep.name.as_str()) {
+            println!("{}{}", c!(branch(i), dimmed), node_label(dep, dr));
+            if full {
+                let cont = if i + 1 == n { "  " } else { "│ " };
+                print_info(dep, results, states, true, &format!("{}{}", prefix, cont));
             }
         }
     }
@@ -551,7 +579,8 @@ pub fn run(
             "info" => {
                 let cfgd = cfg.state.iter().find(|s| s.name == q.name).unwrap();
                 let full = args.iter().skip(1).any(|a| a == "--full" || a == "full");
-                print_info(cfgd, &result_map, &cfg.state, full, 0);
+                println!("{}", node_label(cfgd, result));
+                print_info(cfgd, &result_map, &cfg.state, full, "");
             }
             "is" => {
                 let expected = args
@@ -676,7 +705,7 @@ pub fn run(
             let note = result_map
                 .get(name)
                 .and_then(|r| r.override_until.as_ref())
-                .map(|u| format!("  (set {})", fmt_until(u)))
+                .map(|u| format!("  {}", c!(format!("(set {})", fmt_until(u)), dimmed)))
                 .unwrap_or_default();
             let mut lines = value.lines();
             if let Some(first) = lines.next() {
@@ -684,7 +713,7 @@ pub fn run(
                     "  {:>width$}  {}{}",
                     c!(label, cyan),
                     c!(first, bold),
-                    c!(note, dimmed),
+                    note,
                     width = max_name
                 );
                 for line in lines {
