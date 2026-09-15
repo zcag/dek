@@ -148,7 +148,8 @@ enum Commands {
         /// Output as JSON
         #[arg(long)]
         json: bool,
-        /// Extra args: "is <val>" or "isnot <val>"
+        /// Extra args: "is <val>", "isnot <val>", "get <val>... <default>",
+        /// "set <val> [duration]" (override until midnight, or for e.g. 3h), "unset"
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
     },

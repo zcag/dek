@@ -1,6 +1,9 @@
 use anyhow::{bail, Result};
 use std::collections::{HashMap, HashSet};
-use std::process::{Command, Stdio};
+use std::path::PathBuf;
+use std::process::Stdio;
+
+use chrono::TimeZone;
 
 use crate::config;
 use crate::config::StateConfig;
@@ -12,6 +15,8 @@ pub struct StateResult {
     /// Parsed JSON when `json: true` on the state config
     pub raw_parsed: Option<serde_json::Value>,
     pub templates: HashMap<String, String>,
+    /// Set when a `dek state <name> set` override is in force: human "until ..."
+    pub override_until: Option<String>,
 }
 
 impl StateResult {
@@ -40,6 +45,81 @@ impl StateResult {
             serde_json::Value::String(self.raw.clone())
         }
     }
+}
+
+// =============================================================================
+// Overrides -- `dek state <name> set <value> [duration]`
+//
+// One file per probe under $XDG_STATE_HOME/dek/override: the value, then the
+// expiry as a unix timestamp. While it is live the probe's computed value goes
+// to `original` and the override becomes `raw`, rewrites skipped (the user set
+// the final word), templates still rendered. Past the deadline the file is
+// dropped on first sight and the probe is back on its own logic; nothing else
+// has to notice.
+// =============================================================================
+
+fn override_dir() -> PathBuf {
+    std::env::var("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".into())).join(".local/state")
+        })
+        .join("dek/override")
+}
+
+/// Live override for a probe: (value, expiry). Expired files are removed here.
+fn override_get(name: &str) -> Option<(String, chrono::DateTime<chrono::Local>)> {
+    let path = override_dir().join(name);
+    let text = std::fs::read_to_string(&path).ok()?;
+    let (value, until) = text.trim_end().rsplit_once('\n')?;
+    let until = chrono::Local.timestamp_opt(until.parse().ok()?, 0).single()?;
+    if chrono::Local::now() >= until {
+        let _ = std::fs::remove_file(&path);
+        return None;
+    }
+    Some((value.to_string(), until))
+}
+
+/// "until 23:59" today, "until midnight" for the default, else a dated stamp.
+fn fmt_until(until: &chrono::DateTime<chrono::Local>) -> String {
+    let now = chrono::Local::now();
+    let t = until.time();
+    if until.date_naive() == now.date_naive() {
+        format!("until {}", until.format("%H:%M"))
+    } else if until.date_naive() == now.date_naive().succ_opt().unwrap_or(now.date_naive())
+        && t.format("%H:%M").to_string() == "00:00"
+    {
+        "until midnight".to_string()
+    } else {
+        format!("until {}", until.format("%Y-%m-%d %H:%M"))
+    }
+}
+
+fn override_cmd(name: &str, op: &str, args: &[String]) -> Result<()> {
+    let path = override_dir().join(name);
+    if op == "unset" || args.first().map(|v| v.as_str()) == Some("auto") {
+        let _ = std::fs::remove_file(&path);
+        println!("{} = auto", name);
+        return Ok(());
+    }
+    let value = args
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("Usage: dek state <name> set <value> [duration] | unset"))?;
+    let now = chrono::Local::now();
+    let until = match args.get(1) {
+        Some(d) => now + chrono::Duration::from_std(crate::util::parse_duration(d)?)?,
+        None => {
+            let tomorrow = now.date_naive().succ_opt().unwrap();
+            chrono::Local
+                .from_local_datetime(&tomorrow.and_hms_opt(0, 0, 0).unwrap())
+                .earliest()
+                .unwrap()
+        }
+    };
+    std::fs::create_dir_all(&path.parent().unwrap())?;
+    std::fs::write(&path, format!("{}\n{}\n", value, until.timestamp()))?;
+    println!("{} = {} {}", name, value, fmt_until(&until));
+    Ok(())
 }
 
 struct StateQuery {
@@ -197,15 +277,23 @@ fn eval_single(state: &StateConfig, dep_results: &HashMap<String, &StateResult>)
         None => cmd_output.unwrap_or_default(),
     };
 
-    // Apply rewrites
+    // An override is the final word: it replaces rewrites, and what the probe
+    // computed on its own is kept as `original`.
     let mut original = None;
     let mut raw = raw_before_rewrite.clone();
-    for rule in &state.rewrite {
-        if let Ok(re) = regex::Regex::new(&rule.pattern) {
-            if re.is_match(&raw) {
-                original = Some(raw_before_rewrite.clone());
-                raw = rule.value.clone();
-                break;
+    let mut override_until = None;
+    if let Some((value, until)) = override_get(&state.name) {
+        original = Some(raw_before_rewrite.clone());
+        raw = value;
+        override_until = Some(fmt_until(&until));
+    } else {
+        for rule in &state.rewrite {
+            if let Ok(re) = regex::Regex::new(&rule.pattern) {
+                if re.is_match(&raw) {
+                    original = Some(raw_before_rewrite.clone());
+                    raw = rule.value.clone();
+                    break;
+                }
             }
         }
     }
@@ -267,6 +355,7 @@ fn eval_single(state: &StateConfig, dep_results: &HashMap<String, &StateResult>)
         raw,
         raw_parsed,
         templates: rendered,
+        override_until,
     }
 }
 
@@ -341,6 +430,16 @@ pub fn run(
 
     // Parse the first name for dot notation
     let query = name.as_ref().map(|n| parse_query(n));
+
+    // set / unset write an override and touch no probe
+    if let (Some(q), Some(op)) = (&query, args.first()) {
+        if op == "set" || op == "unset" {
+            if !cfg.state.iter().any(|s| s.name == q.name) {
+                bail!("Unknown state probe: {}", q.name);
+            }
+            return override_cmd(&q.name, op, &args[1..]);
+        }
+    }
 
     // Collect additional names from args (non-operator mode)
     let has_op = query.is_some()
@@ -465,6 +564,9 @@ pub fn run(
             for r in &results {
                 let mut obj = serde_json::Map::new();
                 obj.insert("raw".to_string(), r.raw_json());
+                if let Some(ref u) = r.override_until {
+                    obj.insert("override".to_string(), serde_json::Value::String(u.clone()));
+                }
                 if let Some(ref orig) = r.original {
                     obj.insert(
                         "original".to_string(),
@@ -505,13 +607,18 @@ pub fn run(
                 None => name.to_string(),
             };
             use owo_colors::OwoColorize;
-            let lines: Vec<&str> = value.lines().collect();
+            let note = result_map
+                .get(name)
+                .and_then(|r| r.override_until.as_deref())
+                .map(|u| format!("  (set {})", u))
+                .unwrap_or_default();
             let mut lines = value.lines();
             if let Some(first) = lines.next() {
                 println!(
-                    "  {:>width$}  {}",
+                    "  {:>width$}  {}{}",
                     c!(label, cyan),
                     c!(first, bold),
+                    c!(note, dimmed),
                     width = max_name
                 );
                 for line in lines {

@@ -721,6 +721,18 @@ dek state screen get tv ultra def  # "tv"/"ultra" pass through, else "def"
 dek state summary.default          # computed from deps: "hostname/tv/night"
 ```
 
+A probe can be overridden by hand for a while; afterwards it silently goes back to its own logic:
+
+```bash
+dek state working set off          # until local midnight (the default)
+dek state working set on 3h        # for a duration (s/m/h/d)
+dek state working unset            # back to auto now (same as `set auto`)
+dek state                          # ... working  off  (set until midnight)
+dek state working.original         # what the probe computes on its own
+```
+
+Overrides live in `$XDG_STATE_HOME/dek/override/<name>` (default `~/.local/state/dek/override/`), one per host. While one is in force it replaces the probe's rewrites; templates still render from it, and `--json` carries an `override` field.
+
 Alias: `s`. Useful in scripts:
 
 ```bash
