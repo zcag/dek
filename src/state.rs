@@ -15,8 +15,8 @@ pub struct StateResult {
     /// Parsed JSON when `json: true` on the state config
     pub raw_parsed: Option<serde_json::Value>,
     pub templates: HashMap<String, String>,
-    /// Set when a `dek state <name> set` override is in force: human "until ..."
-    pub override_until: Option<String>,
+    /// Set when a `dek state <name> set` override is in force
+    pub override_until: Option<chrono::DateTime<chrono::Local>>,
 }
 
 impl StateResult {
@@ -92,6 +92,47 @@ fn fmt_until(until: &chrono::DateTime<chrono::Local>) -> String {
         "until midnight".to_string()
     } else {
         format!("until {}", until.format("%Y-%m-%d %H:%M"))
+    }
+}
+
+fn fmt_left(until: &chrono::DateTime<chrono::Local>) -> String {
+    let secs = (*until - chrono::Local::now()).num_seconds().max(0);
+    match secs {
+        s if s < 60 => format!("{}s", s),
+        s if s < 3600 => format!("{}m", s / 60),
+        s if s < 86400 => format!("{}h{:02}m", s / 3600, (s % 3600) / 60),
+        s => format!("{}d{}h", s / 86400, (s % 86400) / 3600),
+    }
+}
+
+/// `dek state <name> info`: everything behind one value, for when the value
+/// is a surprise. Override first, since that is the usual reason.
+fn print_info(state: &StateConfig, r: &StateResult, results: &HashMap<&str, &StateResult>) {
+    use owo_colors::OwoColorize;
+    let row = |k: &str, v: String| println!("  {:>9}  {}", c!(k, cyan), v);
+    row(&state.name, format!("{}", c!(r.raw, bold)));
+    if let Some(u) = &r.override_until {
+        row("override", format!("{}, {} left", fmt_until(u), fmt_left(u)));
+        row("computed", r.original.clone().unwrap_or_default());
+    } else if let Some(o) = &r.original {
+        row("rewrite", format!("{} <- {}", r.raw, o));
+    }
+    for d in &state.deps {
+        row("dep", format!("{} = {}", d, results.get(d.as_str()).map(|x| x.raw.as_str()).unwrap_or("?")));
+    }
+    if let Some(cmd) = &state.cmd {
+        row("cmd", cmd.lines().next().unwrap_or("").trim().to_string());
+    }
+    if let Some(expr) = &state.expr {
+        row("expr", expr.clone());
+    }
+    if let Some(ttl) = &state.ttl {
+        row("ttl", ttl.clone());
+    }
+    let mut names: Vec<_> = r.templates.iter().collect();
+    names.sort();
+    for (k, v) in names {
+        row(&format!(".{}", k), v.clone());
     }
 }
 
@@ -285,7 +326,7 @@ fn eval_single(state: &StateConfig, dep_results: &HashMap<String, &StateResult>)
     if let Some((value, until)) = override_get(&state.name) {
         original = Some(raw_before_rewrite.clone());
         raw = value;
-        override_until = Some(fmt_until(&until));
+        override_until = Some(until);
     } else {
         for rule in &state.rewrite {
             if let Ok(re) = regex::Regex::new(&rule.pattern) {
@@ -444,7 +485,7 @@ pub fn run(
     // Collect additional names from args (non-operator mode)
     let has_op = query.is_some()
         && !args.is_empty()
-        && matches!(args[0].as_str(), "is" | "isnot" | "get");
+        && matches!(args[0].as_str(), "is" | "isnot" | "get" | "info");
 
     let mut queries: Vec<StateQuery> = Vec::new();
     if let Some(q) = query {
@@ -487,6 +528,10 @@ pub fn run(
 
         let op = &args[0];
         match op.as_str() {
+            "info" => {
+                let cfgd = cfg.state.iter().find(|s| s.name == q.name).unwrap();
+                print_info(cfgd, result, &result_map);
+            }
             "is" => {
                 let expected = args
                     .get(1)
@@ -565,7 +610,7 @@ pub fn run(
                 let mut obj = serde_json::Map::new();
                 obj.insert("raw".to_string(), r.raw_json());
                 if let Some(ref u) = r.override_until {
-                    obj.insert("override".to_string(), serde_json::Value::String(u.clone()));
+                    obj.insert("override".to_string(), serde_json::Value::String(u.to_rfc3339()));
                 }
                 if let Some(ref orig) = r.original {
                     obj.insert(
@@ -609,8 +654,8 @@ pub fn run(
             use owo_colors::OwoColorize;
             let note = result_map
                 .get(name)
-                .and_then(|r| r.override_until.as_deref())
-                .map(|u| format!("  (set {})", u))
+                .and_then(|r| r.override_until.as_ref())
+                .map(|u| format!("  (set {})", fmt_until(u)))
                 .unwrap_or_default();
             let mut lines = value.lines();
             if let Some(first) = lines.next() {

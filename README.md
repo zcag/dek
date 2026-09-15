@@ -729,6 +729,7 @@ dek state working set on 3h        # for a duration (s/m/h/d)
 dek state working unset            # back to auto now (same as `set auto`)
 dek state                          # ... working  off  (set until midnight)
 dek state working.original         # what the probe computes on its own
+dek state working info             # value, override + time left, computed value, deps, cmd/expr
 ```
 
 Overrides live in `$XDG_STATE_HOME/dek/override/<name>` (default `~/.local/state/dek/override/`), one per host. While one is in force it replaces the probe's rewrites; templates still render from it, and `--json` carries an `override` field.
