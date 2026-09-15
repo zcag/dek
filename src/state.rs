@@ -106,19 +106,27 @@ fn fmt_left(until: &chrono::DateTime<chrono::Local>) -> String {
 }
 
 /// `dek state <name> info`: everything behind one value, for when the value
-/// is a surprise. Override first, since that is the usual reason.
-fn print_info(state: &StateConfig, r: &StateResult, results: &HashMap<&str, &StateResult>) {
+/// is a surprise. Override first, since that is the usual reason. `--full`
+/// recurses into the deps, each block indented under the one that needs it.
+fn print_info(
+    state: &StateConfig,
+    results: &HashMap<&str, &StateResult>,
+    states: &[StateConfig],
+    full: bool,
+    depth: usize,
+) {
     use owo_colors::OwoColorize;
-    let row = |k: &str, v: String| println!("  {:>9}  {}", c!(k, cyan), v);
+    let Some(r) = results.get(state.name.as_str()) else { return };
+    let pad = "    ".repeat(depth);
+    // Key column wide enough for the longest probe name, so nested blocks line up
+    let w = states.iter().map(|s| s.name.len()).max().unwrap_or(0).max(9);
+    let row = |k: &str, v: String| println!("{}  {:>w$}  {}", pad, c!(k, cyan), v, w = w);
     row(&state.name, format!("{}", c!(r.raw, bold)));
     if let Some(u) = &r.override_until {
         row("override", format!("{}, {} left", fmt_until(u), fmt_left(u)));
         row("computed", r.original.clone().unwrap_or_default());
     } else if let Some(o) = &r.original {
         row("rewrite", format!("{} <- {}", r.raw, o));
-    }
-    for d in &state.deps {
-        row("dep", format!("{} = {}", d, results.get(d.as_str()).map(|x| x.raw.as_str()).unwrap_or("?")));
     }
     if let Some(cmd) = &state.cmd {
         row("cmd", cmd.lines().next().unwrap_or("").trim().to_string());
@@ -133,6 +141,12 @@ fn print_info(state: &StateConfig, r: &StateResult, results: &HashMap<&str, &Sta
     names.sort();
     for (k, v) in names {
         row(&format!(".{}", k), v.clone());
+    }
+    for d in &state.deps {
+        match states.iter().find(|s| &s.name == d) {
+            Some(dep) if full => print_info(dep, results, states, true, depth + 1),
+            _ => row("dep", format!("{} = {}", d, results.get(d.as_str()).map(|x| x.raw.as_str()).unwrap_or("?"))),
+        }
     }
 }
 
@@ -530,7 +544,8 @@ pub fn run(
         match op.as_str() {
             "info" => {
                 let cfgd = cfg.state.iter().find(|s| s.name == q.name).unwrap();
-                print_info(cfgd, result, &result_map);
+                let full = args.iter().skip(1).any(|a| a == "--full" || a == "full");
+                print_info(cfgd, &result_map, &cfg.state, full, 0);
             }
             "is" => {
                 let expected = args
