@@ -121,7 +121,9 @@ fn print_info(
     // Key column wide enough for the longest probe name, so nested blocks line up
     let w = states.iter().map(|s| s.name.len()).max().unwrap_or(0).max(9);
     let row = |k: &str, v: String| println!("{}  {:>w$}  {}", pad, c!(k, cyan), v, w = w);
-    row(&state.name, format!("{}", c!(r.raw, bold)));
+    if depth == 0 {
+        row(&state.name, format!("{}", c!(r.raw, bold)));
+    }
     if let Some(u) = &r.override_until {
         row("override", format!("{}, {} left", fmt_until(u), fmt_left(u)));
         row("computed", r.original.clone().unwrap_or_default());
@@ -142,10 +144,14 @@ fn print_info(
     for (k, v) in names {
         row(&format!(".{}", k), v.clone());
     }
+    // A dep is always a `dep  name = value` row; --full hangs its details below it
     for d in &state.deps {
-        match states.iter().find(|s| &s.name == d) {
-            Some(dep) if full => print_info(dep, results, states, true, depth + 1),
-            _ => row("dep", format!("{} = {}", d, results.get(d.as_str()).map(|x| x.raw.as_str()).unwrap_or("?"))),
+        let v = results.get(d.as_str()).map(|x| x.raw.as_str()).unwrap_or("?");
+        row("dep", format!("{} = {}", c!(d, bold), v));
+        if full {
+            if let Some(dep) = states.iter().find(|s| &s.name == d) {
+                print_info(dep, results, states, true, depth + 1);
+            }
         }
     }
 }
